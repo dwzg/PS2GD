@@ -224,6 +224,25 @@ static int solve_level(int idx, int maxK, int verbose)
             if (t >= 0) {
                 okc++;
                 if (verbose && K == 1) printf("  K=1: solved in %d ticks (%.1f s), %ld states\n", t, t / 60.0f, s_nodes);
+                /* a portal the solution never touched means the level can be skipped */
+                Player r;
+                sim_reset(&r, L);
+                int prev = 0;
+                while (!r.done && !r.dead && r.ticks < MAX_TICKS) {
+                    int h = s_sol[r.ticks];
+                    sim_tick(&r, L, h, h && !prev);
+                    prev = h;
+                }
+                for (int i = 0; i < L->nobjs; i++) {
+                    const LevelObj *o = &L->objs[i];
+                    if (o->type < OBJ_PORTAL_CUBE || o->type > OBJ_SPEED_3) continue;
+                    if (!((r.used[o->id >> 5] >> (o->id & 31)) & 1)) {
+                        printf("  WARNING K=%d phase=%d: portal type %d at x=%d y=%d was bypassed\n", K, ph, o->type,
+                               o->cx, o->cy);
+                        okc--;
+                        break;
+                    }
+                }
             } else {
                 printf("  K=%d phase=%d: FAILED, furthest x=%.1f (%d%%) states=%ld\n", K, ph, reached,
                        (int)(reached / L->end_x * 100), s_nodes);
@@ -522,6 +541,15 @@ static int cmd_check(void)
                info.name, difficulty_name(info.difficulty), L->width, L->height, L->nobjs, L->ncoins, t, slen,
                t > slen ? "  (song loops)" : "");
         if (L->ncoins != 3) printf("  note: level has %d coins (expected 3)\n", L->ncoins);
+        for (int k = 0; k < L->nobjs; k++) {
+            const LevelObj *o = &L->objs[k];
+            if (o->type == OBJ_SPIKE_UP && o->cy > 0 && !level_solid_at(L, o->cx, o->cy - 1))
+                printf("  note: floating up-spike at x=%d row=%d\n", o->cx, o->cy);
+            if (o->type == OBJ_SPIKE_DOWN && o->cy < 9 && !level_solid_at(L, o->cx, o->cy + 1))
+                printf("  note: floating down-spike at x=%d row=%d\n", o->cx, o->cy);
+            if (o->type >= OBJ_SPEED_0 && o->type <= OBJ_SPEED_3 && o->cy == 0)
+                printf("  note: speed portal at x=%d sits on row 0 (a jump can skip it)\n", o->cx);
+        }
         level_free(L);
     }
     return bad;
@@ -662,6 +690,32 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "overview") && argc >= 4) return cmd_overview(level_arg(argv[2]), argv[3]);
     if (!strcmp(cmd, "wav") && argc >= 5) return cmd_wav(atoi(argv[2]), (float)atof(argv[3]), argv[4]);
     if (!strcmp(cmd, "smoke")) return cmd_smoke() ? 1 : 0;
+    if (!strcmp(cmd, "trace") && argc >= 5) {
+        /* print the solver's player state between two x positions */
+        int idx = level_arg(argv[2]);
+        float x0 = (float)atof(argv[3]), x1 = (float)atof(argv[4]);
+        if (get_solution(idx) < 0) {
+            printf("no solution; tracing furthest attempt\n");
+            Level *Lb = level_parse(g_levels[idx].src);
+            solve(Lb, 1, 0, NULL);
+            memcpy(s_sol, s_best_sol, sizeof(s_sol));
+            level_free(Lb);
+        }
+        Level *L = level_parse(g_levels[idx].src);
+        Player p;
+        sim_reset(&p, L);
+        int prev = 0;
+        while (!p.done && !p.dead && p.ticks < MAX_TICKS) {
+            int h = s_sol[p.ticks];
+            sim_tick(&p, L, h, h && !prev);
+            prev = h;
+            if (p.x >= x0 && p.x <= x1)
+                printf("t=%4d x=%6.2f y=%6.2f vy=%6.2f mode=%d grav=%d grounded=%d held=%d floor=%.1f ceil=%.1f ev=%x\n",
+                       p.ticks, p.x, p.y, p.vy, p.mode, p.grav, p.grounded, h, p.floor_y, p.ceil_y, p.events);
+        }
+        level_free(L);
+        return 0;
+    }
     fprintf(stderr, "unknown command\n");
     return 2;
 }
