@@ -50,19 +50,30 @@ const char *plat_name(void) { return "TOOL"; }
 /* Solver                                                              */
 /* ------------------------------------------------------------------ */
 
-#define VIS_BITS 23
-#define VIS_SIZE (1u << VIS_BITS)
 #define MAX_TICKS 20000
+#define BEAM 20000
+#define HSIZE 65536 /* > 2 * BEAM, power of two */
 
-static uint64_t *s_vis;
 static const Level *s_L;
 static int s_K, s_phase;
-static long s_nodes, s_node_limit = 30000000;
+static long s_nodes;
 static uint8_t s_sol[MAX_TICKS];
 static uint8_t s_best_sol[MAX_TICKS]; /* inputs of the furthest attempt */
-static int s_best_x_tick;
 static float s_best_x;
-static int s_need_coins; /* require every coin to count as solved */
+static int s_need_coins; /* require these coins (bitmask) to count as solved */
+static float s_coin_x[4];
+
+typedef struct {
+    Player p;
+    uint8_t prev; /* button held on the previous tick */
+} Node;
+
+static Node *s_cur, *s_next;
+static uint16_t *s_par[MAX_TICKS]; /* parent index in the previous frontier */
+static uint8_t *s_inp[MAX_TICKS];  /* input that led to this node */
+static uint64_t s_hash[HSIZE];
+static uint16_t s_tmp_par[BEAM];
+static uint8_t s_tmp_inp[BEAM];
 
 static uint64_t mix64(uint64_t h, uint64_t v)
 {
@@ -70,12 +81,12 @@ static uint64_t mix64(uint64_t h, uint64_t v)
     return h * 0xff51afd7ed558ccdULL;
 }
 
+/* States closer than this quantization are treated as identical. */
 static uint64_t state_key(const Player *p, int prev_held)
 {
     uint64_t h = 1469598103934665603ULL;
-    h = mix64(h, (uint64_t)p->ticks);
-    h = mix64(h, (uint64_t)(int64_t)lroundf(p->y * 64.0f));
-    h = mix64(h, (uint64_t)(int64_t)lroundf(p->vy * 8.0f));
+    h = mix64(h, (uint64_t)(int64_t)lroundf(p->y * 16.0f));
+    h = mix64(h, (uint64_t)(int64_t)lroundf(p->vy * 2.0f));
     h = mix64(h, (uint64_t)(int64_t)lroundf(p->x * 16.0f));
     h = mix64(h, (uint64_t)(p->mode | ((p->grav + 1) << 4) | (p->grounded << 6) | (p->buf << 7) |
                             (p->speed_idx << 8) | (prev_held << 11) | ((uint64_t)p->coins << 12)));
@@ -83,74 +94,119 @@ static uint64_t state_key(const Player *p, int prev_held)
     return h | 1u;
 }
 
-/* Returns 1 if newly inserted. */
-static int visit(uint64_t k)
+static int hash_insert(uint64_t k)
 {
-    uint32_t i = (uint32_t)(k >> 20) & (VIS_SIZE - 1);
+    uint32_t i = (uint32_t)(k >> 24) & (HSIZE - 1);
     for (;;) {
-        if (s_vis[i] == k) return 0;
-        if (s_vis[i] == 0) {
-            s_vis[i] = k;
+        if (s_hash[i] == k) return 0;
+        if (s_hash[i] == 0) {
+            s_hash[i] = k;
             return 1;
         }
-        i = (i + 1) & (VIS_SIZE - 1);
+        i = (i + 1) & (HSIZE - 1);
     }
 }
 
-static int dfs(const Player *p, int prev_held)
+static int coins_ok(const Player *p)
 {
-    if (p->done) return !s_need_coins || p->coins == (uint8_t)((1u << s_L->ncoins) - 1u);
-    if (p->dead) return 0;
-    if (p->ticks >= MAX_TICKS - 64) return 0;
-    if (p->x > s_best_x) {
-        s_best_x = p->x;
-        s_best_x_tick = p->ticks;
-        memcpy(s_best_sol, s_sol, (size_t)p->ticks);
-    }
-    if (!visit(state_key(p, prev_held))) return 0;
-    if (++s_nodes > s_node_limit) return 0;
-    int seg = s_K - ((p->ticks + s_K - s_phase) % s_K);
-    for (int choice = 0; choice < 2; choice++) {
-        int held = choice;
-        Player q = *p;
-        int ph = prev_held;
-        int t0 = q.ticks;
-        for (int i = 0; i < seg && !q.dead && !q.done; i++) {
-            sim_tick(&q, s_L, held, held && !ph);
-            s_sol[t0 + i] = (uint8_t)held;
-            ph = held;
-        }
-        if (dfs(&q, ph)) return 1;
-    }
-    return 0;
+    if (!s_need_coins) return 1;
+    for (int i = 0; i < s_L->ncoins && i < 4; i++)
+        if (((s_need_coins >> i) & 1) && !((p->coins >> i) & 1) && (p->done || p->x > s_coin_x[i] + 1.6f))
+            return 0;
+    return 1;
 }
 
-/* Returns ticks to finish, or -1. */
+/* Write the input sequence ending at frontier node idx of tick t into dst. */
+static void backtrack(int t, int idx, uint8_t *dst)
+{
+    for (int k = t; k > 0; k--) {
+        dst[k - 1] = s_inp[k][idx];
+        idx = s_par[k][idx];
+    }
+}
+
+/*
+ * Breadth-first beam search over inputs. Inputs may only change on ticks
+ * where (tick - phase) % K == 0, which models a player reacting at 60/K Hz.
+ * Returns ticks to finish, or -1.
+ */
 static int solve(const Level *L, int K, int phase, float *reached)
 {
     s_L = L;
     s_K = K;
     s_phase = phase;
+    for (int i = 0; i < L->nobjs; i++)
+        if (L->objs[i].type == OBJ_COIN) s_coin_x[(L->objs[i].flags >> 4) & 3] = L->objs[i].cx + 0.5f;
+    if (!s_cur) {
+        s_cur = (Node *)malloc(sizeof(Node) * BEAM);
+        s_next = (Node *)malloc(sizeof(Node) * BEAM);
+    }
+    for (int t = 0; t < MAX_TICKS; t++) {
+        free(s_par[t]);
+        free(s_inp[t]);
+        s_par[t] = NULL;
+        s_inp[t] = NULL;
+    }
     s_nodes = 0;
     s_best_x = 0.0f;
-    if (!s_vis) s_vis = (uint64_t *)calloc(VIS_SIZE, sizeof(uint64_t));
-    else memset(s_vis, 0, VIS_SIZE * sizeof(uint64_t));
     memset(s_sol, 0, sizeof(s_sol));
-    Player p;
-    sim_reset(&p, L);
-    int ok = dfs(&p, 0);
-    if (reached) *reached = s_best_x;
-    if (!ok) return -1;
-    /* replay to measure */
-    Player r;
-    sim_reset(&r, L);
-    int prev = 0;
-    while (!r.done && !r.dead && r.ticks < MAX_TICKS) {
-        int h = s_sol[r.ticks];
-        sim_tick(&r, L, h, h && !prev);
-        prev = h;
+    memset(s_best_sol, 0, sizeof(s_best_sol));
+
+    int ncur = 1;
+    sim_reset(&s_cur[0].p, L);
+    s_cur[0].prev = 0;
+    int result = -1;
+    for (int t = 0; t < MAX_TICKS - 1 && ncur > 0; t++) {
+        int decision = ((t - phase) % K + K) % K == 0;
+        int nnext = 0;
+        memset(s_hash, 0, sizeof(s_hash));
+        s_par[t + 1] = s_tmp_par;
+        s_inp[t + 1] = s_tmp_inp;
+        int best_i = 0;
+        for (int i = 0; i < ncur && result < 0; i++) {
+            for (int c = 0; c < 2; c++) {
+                int held = decision ? c : s_cur[i].prev;
+                if (!decision && c == 1) break;
+                Node n = s_cur[i];
+                sim_tick(&n.p, L, held, held && !n.prev);
+                n.prev = (uint8_t)held;
+                s_nodes++;
+                if (n.p.dead || !coins_ok(&n.p)) continue;
+                if (n.p.done) {
+                    s_tmp_par[0] = (uint16_t)i;
+                    s_tmp_inp[0] = (uint8_t)held;
+                    result = t + 1;
+                    break;
+                }
+                if (nnext >= BEAM || !hash_insert(state_key(&n.p, held))) continue;
+                s_tmp_par[nnext] = (uint16_t)i;
+                s_tmp_inp[nnext] = (uint8_t)held;
+                s_next[nnext++] = n;
+            }
+        }
+        /* keep exactly-sized copies of this tick's parent links */
+        int keep = result >= 0 ? 1 : nnext;
+        s_par[t + 1] = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)(keep > 0 ? keep : 1));
+        s_inp[t + 1] = (uint8_t *)malloc((size_t)(keep > 0 ? keep : 1));
+        memcpy(s_par[t + 1], s_tmp_par, sizeof(uint16_t) * (size_t)keep);
+        memcpy(s_inp[t + 1], s_tmp_inp, (size_t)keep);
+        if (result >= 0) {
+            backtrack(t + 1, 0, s_sol);
+            break;
+        }
+        for (int i = 0; i < nnext; i++)
+            if (s_next[i].p.x > s_next[best_i].p.x) best_i = i;
+        if (nnext > 0 && s_next[best_i].p.x > s_best_x) {
+            s_best_x = s_next[best_i].p.x;
+            backtrack(t + 1, best_i, s_best_sol);
+        }
+        Node *tmp = s_cur;
+        s_cur = s_next;
+        s_next = tmp;
+        ncur = nnext;
     }
-    return r.done ? r.ticks : -1;
+    if (reached) *reached = s_best_x;
+    return result;
 }
 
 static int solve_level(int idx, int maxK, int verbose)
@@ -167,9 +223,9 @@ static int solve_level(int idx, int maxK, int verbose)
             int t = solve(L, K, ph, &reached);
             if (t >= 0) {
                 okc++;
-                if (verbose && K == 1) printf("  K=1: solved in %d ticks (%.1f s), %ld nodes\n", t, t / 60.0f, s_nodes);
+                if (verbose && K == 1) printf("  K=1: solved in %d ticks (%.1f s), %ld states\n", t, t / 60.0f, s_nodes);
             } else {
-                printf("  K=%d phase=%d: FAILED, furthest x=%.1f (%d%%) nodes=%ld\n", K, ph, reached,
+                printf("  K=%d phase=%d: FAILED, furthest x=%.1f (%d%%) states=%ld\n", K, ph, reached,
                        (int)(reached / L->end_x * 100), s_nodes);
             }
         }
@@ -575,14 +631,22 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "coins") && argc >= 3) {
         /* can every coin be collected in a single run? */
         int fails = 0;
-        s_need_coins = 1;
         for (int i = 0; i < g_level_count; i++) {
             if (strcmp(argv[2], "all") && atoi(argv[2]) != i) continue;
             Level *L = level_parse(g_levels[i].src);
             float reached;
+            s_need_coins = argc > 3 ? atoi(argv[3]) : (1 << L->ncoins) - 1;
             int t = solve(L, 1, 0, &reached);
             printf("level %d: all %d coins %s\n", i, L->ncoins, t >= 0 ? "collectable" : "NOT collectable in one run");
-            fails += t < 0;
+            if (t < 0) {
+                fails++;
+                for (int c = 0; c < L->ncoins; c++) {
+                    s_need_coins = 1 << c;
+                    int tc = solve(L, 1, 0, &reached);
+                    printf("  coin %d at x=%.0f: %s\n", c, s_coin_x[c], tc >= 0 ? "ok alone" : "UNREACHABLE");
+                }
+            }
+            s_need_coins = 0;
             level_free(L);
         }
         return fails ? 1 : 0;
