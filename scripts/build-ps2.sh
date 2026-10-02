@@ -1,0 +1,21 @@
+#!/bin/sh
+# Build the PS2 ELF inside the official ps2dev Docker image.
+# Usage: scripts/build-ps2.sh [make targets...]
+set -e
+cd "$(dirname "$0")/.."
+IMAGE="${PS2DEV_IMAGE:-ps2dev/ps2dev:latest}"
+
+# Pass through an HTTPS proxy / CA bundle if the host uses one (needed for apk).
+EXTRA=""
+if [ -n "$HTTPS_PROXY" ]; then
+    EXTRA="--network host -e HTTPS_PROXY=$HTTPS_PROXY -e https_proxy=$HTTPS_PROXY"
+    if [ -n "$SSL_CERT_FILE" ] && [ -f "$SSL_CERT_FILE" ]; then
+        EXTRA="$EXTRA -v $SSL_CERT_FILE:/etc/ssl/certs/ca-certificates.crt:ro"
+    fi
+fi
+
+exec docker run --rm $EXTRA -v "$PWD":/src -w /src -e OWNER="$(id -u):$(id -g)" "$IMAGE" \
+    sh -c 'command -v make >/dev/null 2>&1 || { echo "installing make..."; apk add --no-cache make >/dev/null; }
+           make -j"$(nproc)" "$@"; status=$?
+           [ -d build ] && chown -R "$OWNER" build
+           exit $status' sh "$@"

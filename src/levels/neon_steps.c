@@ -1,0 +1,27 @@
+#include <stddef.h>
+
+const char *const LEVEL_NEON_STEPS[] = {
+"#name Neon Steps",
+"#song 0",
+"#diff 0",
+"#stars 1",
+"#pal 0",
+"|                                                                                ",
+"|                                                                                ",
+"|                                                                                ",
+"|                                                                                ",
+"|                          y        $                                            ",
+"|                    ###        ###                  p      b   v  v             ",
+"|            ^      ####       ####   *      Y   ,     ^^       ######           ",
+"!                                         1                                      ",
+"",
+"|                    vvvvvv                                ",
+"|                    ######                                ",
+"|                                                          ",
+"|                                                          ",
+"|                                                          ",
+"|              S                                           ",
+"|                     ^^      ###        C                 ",
+"|                    ####                                  ",
+"",
+NULL};
