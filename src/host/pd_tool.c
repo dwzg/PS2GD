@@ -59,8 +59,10 @@ static const Level *s_L;
 static int s_K, s_phase;
 static long s_nodes, s_node_limit = 30000000;
 static uint8_t s_sol[MAX_TICKS];
+static uint8_t s_best_sol[MAX_TICKS]; /* inputs of the furthest attempt */
 static int s_best_x_tick;
 static float s_best_x;
+static int s_need_coins; /* require every coin to count as solved */
 
 static uint64_t mix64(uint64_t h, uint64_t v)
 {
@@ -97,12 +99,13 @@ static int visit(uint64_t k)
 
 static int dfs(const Player *p, int prev_held)
 {
-    if (p->done) return 1;
+    if (p->done) return !s_need_coins || p->coins == (uint8_t)((1u << s_L->ncoins) - 1u);
     if (p->dead) return 0;
     if (p->ticks >= MAX_TICKS - 64) return 0;
     if (p->x > s_best_x) {
         s_best_x = p->x;
         s_best_x_tick = p->ticks;
+        memcpy(s_best_sol, s_sol, (size_t)p->ticks);
     }
     if (!visit(state_key(p, prev_held))) return 0;
     if (++s_nodes > s_node_limit) return 0;
@@ -318,7 +321,12 @@ static int cmd_overview(int idx, const char *out)
             ov_rect(r, x + 1, y + 1, S - 2, h - 2, R, G, B);
         }
     }
-    if (sol_ticks > 0) {
+    if (sol_ticks <= 0) {
+        /* show how far the solver got */
+        solve(L, 1, 0, NULL);
+        memcpy(s_sol, s_best_sol, sizeof(s_sol));
+    }
+    {
         Player p;
         sim_reset(&p, L);
         int prev = 0;
@@ -333,6 +341,13 @@ static int cmd_overview(int idx, const char *out)
             int x = (int)((p.x - row * ROWW) * S), y = (int)(oy - p.y * S);
             SDL_RenderDrawPoint(r, x, y);
             if (h) SDL_RenderDrawPoint(r, x, y + 1);
+        }
+        if (p.dead) {
+            int row = (int)(p.x / ROWW);
+            int oy = (row + 1) * ROWH * S - 2 * S;
+            int x = (int)((p.x - row * ROWW) * S), y = (int)(oy - p.y * S);
+            ov_rect(r, x - 4, y - 4, 9, 9, 255, 0, 255);
+            printf("solver dies at x=%.2f y=%.2f\n", p.x, p.y);
         }
     }
     SDL_SaveBMP(surf, out);
@@ -415,6 +430,22 @@ static int cmd_check(void)
         }
     }
     for (int i = 0; i < g_level_count; i++) {
+        /* every row of a section should have the same width */
+        const char *const *src = g_levels[i].src;
+        for (int k = 0; src[k];) {
+            if (src[k][0] != '|' && src[k][0] != '!') { k++; continue; }
+            int start = k, w = (int)strlen(src[k]);
+            while (src[k] && (src[k][0] == '|' || src[k][0] == '!')) {
+                if ((int)strlen(src[k]) != w) {
+                    printf("level %d: ragged section starting at line %d (line %d has width %d, expected %d)\n", i,
+                           start, k, (int)strlen(src[k]) - 1, w - 1);
+                    bad++;
+                    break;
+                }
+                k++;
+            }
+            while (src[k] && (src[k][0] == '|' || src[k][0] == '!')) k++;
+        }
         Level *L = level_parse(g_levels[i].src);
         LevelInfo info;
         level_info(i, &info);
@@ -539,6 +570,21 @@ int main(int argc, char **argv)
             fails += !solve_level(level_arg(argv[2]), K, 1);
         }
         printf("%s\n", fails ? "SOME LEVELS NOT ROBUSTLY SOLVABLE" : "all levels solvable");
+        return fails ? 1 : 0;
+    }
+    if (!strcmp(cmd, "coins") && argc >= 3) {
+        /* can every coin be collected in a single run? */
+        int fails = 0;
+        s_need_coins = 1;
+        for (int i = 0; i < g_level_count; i++) {
+            if (strcmp(argv[2], "all") && atoi(argv[2]) != i) continue;
+            Level *L = level_parse(g_levels[i].src);
+            float reached;
+            int t = solve(L, 1, 0, &reached);
+            printf("level %d: all %d coins %s\n", i, L->ncoins, t >= 0 ? "collectable" : "NOT collectable in one run");
+            fails += t < 0;
+            level_free(L);
+        }
         return fails ? 1 : 0;
     }
     if (!strcmp(cmd, "shot") && argc >= 5) {

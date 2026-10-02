@@ -8,12 +8,19 @@
 
 static char s_pad_buf[2][256] __attribute__((aligned(64)));
 static int s_open[2];
+static int s_last_state[2], s_last_raw[2];
 
-int pad_ps2_init(void)
+int pad_ps2_init(int embedded)
 {
-    int ret = init_joystick_driver(true);
-    if (ret < 0) {
-        printf("pulsedash: joystick driver failed (%d)\n", ret);
+    if (embedded) {
+        /* ps2_drivers loads sio2man/padman from the ELF and calls padInit */
+        int ret = init_joystick_driver(true);
+        if (ret < 0) {
+            printf("pulsedash: joystick driver failed (%d)\n", ret);
+            return -1;
+        }
+    } else if (padInit(0) != 1) {
+        printf("pulsedash: padInit failed\n");
         return -1;
     }
     for (int port = 0; port < 2; port++) s_open[port] = padPortOpen(port, 0, s_pad_buf[port]) != 0;
@@ -24,10 +31,12 @@ static uint32_t read_port(int port)
 {
     if (!s_open[port]) return 0;
     int state = padGetState(port, 0);
+    s_last_state[port] = state;
     if (state != PAD_STATE_STABLE && state != PAD_STATE_FINDCTP1) return 0;
     struct padButtonStatus st;
     if (padRead(port, 0, &st) == 0) return 0;
     uint32_t d = 0xffffu ^ st.btns;
+    s_last_raw[port] = (int)d;
     uint32_t b = 0;
     if (d & PAD_CROSS) b |= BTN_CROSS;
     if (d & PAD_CIRCLE) b |= BTN_CIRCLE;
@@ -56,4 +65,11 @@ static uint32_t read_port(int port)
 uint32_t pad_ps2_read(void)
 {
     return read_port(0) | read_port(1);
+}
+
+void pad_ps2_debug(int *state0, int *raw0, int *open0)
+{
+    *state0 = s_last_state[0];
+    *raw0 = s_last_raw[0];
+    *open0 = s_open[0];
 }

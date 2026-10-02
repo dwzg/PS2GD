@@ -12,4 +12,7 @@ void game_render(void);
 /* Save progress now (frontends call this before shutting down). */
 void game_flush_save(void);
 
+/* One-line description of the current state (for logs/debugging). */
+void game_status(char *buf, int cap);
+
 #endif

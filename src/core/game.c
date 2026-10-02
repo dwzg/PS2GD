@@ -56,6 +56,19 @@ void game_flush_save(void)
     }
 }
 
+void game_status(char *buf, int cap)
+{
+    static const char *names[] = {"title", "select", "play", "garage", "options"};
+    const Game *g = &g_game;
+    if (g->screen == SCR_PLAY && g->play.L)
+        snprintf(buf, (size_t)cap, "screen=play level=%d attempt=%d phase=%d x=%.1f%s best=%d", g->play.level_idx,
+                 g->play.attempt, g->play.phase, (double)g->play.p.x, g->play.practice ? " practice" : "",
+                 g->save.best[g->play.level_idx % SAVE_MAX_LEVELS]);
+    else
+        snprintf(buf, (size_t)cap, "screen=%s sel=%d level=%d song=%d", names[g->screen % 5], g->menu_sel,
+                 g->sel_level, audio_current_song());
+}
+
 void game_init(void)
 {
     Game *g = &g_game;
