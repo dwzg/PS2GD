@@ -111,8 +111,7 @@ static float grid_size(float v, float grid)
     return (n < 1.0f ? 1.0f : n) / grid;
 }
 
-/* Size of one font pixel at a scale. */
-static float pixel_size(float scale)
+float font_pixel(float scale)
 {
     float g = draw_pixel_grid();
     return g > 0.0f ? grid_size(scale, g) : scale;
@@ -122,12 +121,17 @@ float font_width(const char *s, float scale)
 {
     int n = (int)strlen(s);
     if (n == 0) return 0.0f;
-    return (n * 6 - 1) * pixel_size(scale);
+    return (n * 6 - 1) * font_pixel(scale);
 }
 
 float font_height(float scale)
 {
-    return 7 * pixel_size(scale);
+    return 7 * font_pixel(scale);
+}
+
+float font_center_y(float y0, float y1, float scale)
+{
+    return (y0 + y1) * 0.5f - font_height(scale) * 0.5f;
 }
 
 typedef void (*RunFn)(float x0, float y0, float x1, float y1, int row, void *ctx);
@@ -135,12 +139,17 @@ typedef void (*RunFn)(float x0, float y0, float x1, float y1, int row, void *ctx
 /* Walk every horizontal run of set pixels in the string. */
 static void for_each_run(float x, float y, float scale, int align, const char *s, RunFn fn, void *ctx)
 {
-    float px = pixel_size(scale);
-    float w = font_width(s, scale);
+    int free = align & FONT_FREE;
+    align &= ~FONT_FREE;
+    float px = free ? scale : font_pixel(scale);
+    int n = (int)strlen(s);
+    float w = n > 0 ? (n * 6 - 1) * px : 0.0f;
     if (align == ALIGN_CENTER) x -= w * 0.5f;
     else if (align == ALIGN_RIGHT) x -= w;
-    x = grid_snap(x);
-    y = grid_snap(y);
+    if (!free) {
+        x = grid_snap(x);
+        y = grid_snap(y);
+    }
     for (; *s; s++, x += 6 * px) {
         unsigned char ch = norm_char(*s);
         if (ch >= 128 || !s_has[ch]) continue;
@@ -278,7 +287,7 @@ void font_draw(float x, float y, float scale, Color c, int align, const char *s)
 void font_draw_fancy(float x, float y, float scale, Color top, Color bottom, Color outline,
                      float outline_px, int align, const char *s)
 {
-    FancyCtx f = {top, bottom, outline, grid_w(outline_px)};
+    FancyCtx f = {top, bottom, outline, (align & FONT_FREE) ? outline_px : grid_w(outline_px)};
     if (outline_px > 0.0f && COL_A(outline) < 255) {
         static RunList runs;
         runs.n = 0;

@@ -3,6 +3,8 @@
 
 #include "psp_platform.h"
 
+static int s_nub_armed; /* see stick_dpad() */
+
 void pad_psp_init(void)
 {
     sceCtrlSetSamplingCycle(0); /* sample at each vblank */
@@ -25,10 +27,5 @@ uint32_t pad_psp_read(void)
     uint32_t b = 0;
     for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
         if (d.Buttons & map[i].psp) b |= map[i].btn;
-    /* well off centre only, so a worn nub doesn't press anything */
-    if (d.Lx < 0x30) b |= BTN_LEFT;
-    if (d.Lx > 0xD0) b |= BTN_RIGHT;
-    if (d.Ly < 0x30) b |= BTN_UP;
-    if (d.Ly > 0xD0) b |= BTN_DOWN;
-    return b;
+    return b | stick_dpad(d.Lx, d.Ly, &s_nub_armed);
 }

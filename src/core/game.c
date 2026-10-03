@@ -383,15 +383,17 @@ static void draw_level_card(int idx, float cx)
         }
     }
 
-    font_draw(x0 + 30, 232, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
+    float ty = font_center_y(232, 244, 2.0f); /* text beside the bars */
+    font_draw(x0 + 30, ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
     render_progress_bar(x0 + 140, 232, x1 - 80, 244, g->save.best[s] / 100.0f, RGB(90, 255, 120), RGB(210, 255, 210));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best[s]);
-    font_draw(x1 - 66, 232, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
-    font_draw(x0 + 30, 262, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
+    font_draw(x1 - 66, ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    ty = font_center_y(262, 274, 2.0f);
+    font_draw(x0 + 30, ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
     render_progress_bar(x0 + 140, 262, x1 - 80, 274, g->save.best_practice[s] / 100.0f, RGB(80, 200, 255),
                         RGB(210, 240, 255));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best_practice[s]);
-    font_draw(x1 - 66, 262, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(x1 - 66, ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     if (g->save.best[s] >= 100) {
         font_draw_fancy(x1 - 20, 82, 2.0f, RGB(160, 255, 170), RGB(60, 220, 100), RGB(0, 0, 0), 2.0f, ALIGN_RIGHT,
                         "COMPLETE");
@@ -619,7 +621,7 @@ static void options_render(void)
         int sel = g->options_sel == i;
         render_panel(UI_X(110), y - 7, UI_X(530), y + 29, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
         Color tc = i == OPT_ERASE && g->erase_confirm ? RGB(255, 120, 120) : (sel ? COL_WHITE : RGB(170, 180, 200));
-        font_draw(UI_X(130), y + 2, 3.0f, tc, ALIGN_LEFT, labels[i]);
+        font_draw(UI_X(130), font_center_y(y - 7, y + 29, 3.0f), 3.0f, tc, ALIGN_LEFT, labels[i]);
         if (i == OPT_MUSIC || i == OPT_SFX) {
             int v = i == OPT_MUSIC ? g->save.music_vol : g->save.sfx_vol;
             for (int k = 0; k < 10; k++) {
@@ -629,7 +631,7 @@ static void options_render(void)
         } else if (i == OPT_DELAY) {
             char val[24];
             snprintf(val, sizeof(val), sel ? GLYPH_LEFT " %+d MS " GLYPH_RIGHT : "%+d MS", g->save.audio_delay * 10);
-            font_draw(UI_X(426), y + 6, 2.0f, tc, ALIGN_CENTER, val);
+            font_draw(UI_X(426), font_center_y(y - 7, y + 29, 2.0f), 2.0f, tc, ALIGN_CENTER, val);
         }
     }
     if (g->options_sel == OPT_DELAY) {

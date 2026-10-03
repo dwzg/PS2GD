@@ -201,8 +201,10 @@ attempt.
 [PPSSPP](https://github.com/hrydgard/ppsspp)'s headless runner and its
 software renderer: it hooks `tools/ppsspp-harness/PdHarness.cpp` into the
 runner, which presses buttons on a schedule (`PD_SCRIPT`, same format, at the
-PSP's 59.94 Hz), saves screenshots (`PD_SHOTS`) and can choose HOME > Quit
-(`PD_QUIT=<frame>`). These frames come from the PSP build:
+PSP's 59.94 Hz), saves screenshots (`PD_SHOTS`), can choose HOME > Quit
+(`PD_QUIT=<frame>`) and can hold the analog nub off centre from boot
+(`PD_NUB=x,y,frames`, a nub that reads off centre until it is moved). These
+frames come from the PSP build:
 
 ![PSP build running in PPSSPP](docs/screenshots/psp-emulator.png)
 

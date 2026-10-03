@@ -27,13 +27,22 @@ section from this file as release notes.
 
 ### Fixed
 
-- The NEW BEST popup: its black outline grows with the text as it pops in
-  (it used to flash a black blot for the first frames), it fades out evenly
-  (it used to fade in stripes where the outline's pieces overlapped), and
-  it sits higher, above the next attempt's counter, instead of running
-  into it. The LEVEL COMPLETE title pops in the same way.
+- The NEW BEST popup: it grows in smoothly over a third of a second, its
+  black outline with it (it used to flash a black blot for the first
+  frames), it fades out evenly (it used to fade in stripes where the
+  outline's pieces overlapped), and it sits higher, above the next
+  attempt's counter, instead of running into it. The LEVEL COMPLETE title
+  pops in the same way.
 - The glow over the ground's surface line stopped short of the screen
-  edges with hard ends; it now fades out towards the edges with the line.
+  edges with hard ends; it now fades out and thins towards the edges with
+  the line.
+- Blocks' glow now goes round their corners instead of leaving them dark.
+- The percentage next to the progress bar, and the NORMAL / PRACTICE rows
+  beside the bars in the level card and the pause menu, are centred on
+  their bars; the option names on their rows.
+- The analog stick (the PSP's nub) only works as a d-pad once it has been
+  seen near its centre: a PSP-1000's nub can read far off centre at boot
+  until it is moved, which pressed directions (and up jumps).
 - Uneven borders on the PS2 and PC: the resting cube's black frame came out
   2 pixels wide on two sides and 3 on the others, and thin outlines
   changed width as the level scrolled. Text, icons and thin lines are now

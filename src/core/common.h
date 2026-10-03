@@ -90,6 +90,27 @@ enum {
     BTN_SELECT = 1u << 13
 };
 
+/*
+ * An analog stick as a d-pad (0-255 an axis, 128 the centre): directions
+ * well off centre only, and only once the stick has been seen near the
+ * centre. Some read far off centre until first moved (a PSP-1000's nub,
+ * at boot), which would press directions, and up jumps. *armed keeps that
+ * state for the stick.
+ */
+static inline uint32_t stick_dpad(int x, int y, int *armed)
+{
+    if (!*armed) {
+        if (x < 0x50 || x > 0xB0 || y < 0x50 || y > 0xB0) return 0;
+        *armed = 1;
+    }
+    uint32_t b = 0;
+    if (x < 0x30) b |= BTN_LEFT;
+    if (x > 0xD0) b |= BTN_RIGHT;
+    if (y < 0x30) b |= BTN_UP;
+    if (y > 0xD0) b |= BTN_DOWN;
+    return b;
+}
+
 static inline float clampf(float v, float lo, float hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);

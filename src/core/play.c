@@ -544,7 +544,8 @@ static void draw_hud(const PlayState *ps)
     render_progress_bar(x0, 14, x1, 24, frac, RGB(90, 255, 120), RGB(255, 255, 255));
     char buf[32];
     snprintf(buf, sizeof(buf), "%d%%", clampi((int)(frac * 100.0f), 0, 100));
-    font_draw_fancy(x1 + 14, 12, 2.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 2.0f, ALIGN_LEFT, buf);
+    font_draw_fancy(x1 + 14, font_center_y(14, 24, 2.0f), 2.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 2.0f,
+                    ALIGN_LEFT, buf);
 
     if (ps->practice) {
         font_draw_fancy(SCREEN_W / 2, 32, 2.0f, RGB(120, 255, 150), RGB(40, 200, 90), RGB(0, 0, 0), 2.0f,
@@ -557,18 +558,21 @@ static void draw_hud(const PlayState *ps)
     }
     if (ps->best_popup_t > 0.0f) {
         /* Pops in, a little past full size, then fades out. It stays up into
-         * the next attempt, so it sits above that attempt's counter. The
-         * outline grows with the text. On a pixel grid the text grows in
-         * whole pixels, and a little past full size would round to a whole
-         * pixel more and jump back down, so it stops at full size there. */
+         * the next attempt, so it sits above that attempt's counter. While
+         * it grows it is drawn off the pixel grid (FONT_FREE): on the grid
+         * it could only grow a whole screen pixel at a time, on the PSP in
+         * one step from small to full size. It grows to the size it has on
+         * the grid, its outline with it, and then goes onto the grid. */
         float t = 2.0f - ps->best_popup_t;
-        float s = 4.0f * (t < 0.25f ? ease_out_back(t / 0.25f) : 1.0f);
-        if (draw_pixel_grid() > 0.0f) s = minf(s, 4.0f);
+        int grow = t < 0.35f;
+        float full = font_pixel(4.0f), o = grid_w(3.0f);
+        float s = grow ? full * ease_out_back(t / 0.35f) : 4.0f;
+        float h = grow ? 7.0f * s : font_height(4.0f);
         float a = clampf(ps->best_popup_t / 0.4f, 0.0f, 1.0f);
         snprintf(buf, sizeof(buf), "NEW BEST %d%%", ps->best_popup_val);
-        font_draw_fancy(SCREEN_W / 2, 104 - font_height(s) * 0.5f, s, col_with_alpha(RGB(255, 255, 160), a),
-                        col_with_alpha(RGB(255, 170, 40), a), col_with_alpha(RGB(0, 0, 0), a), 3.0f * s / 4.0f,
-                        ALIGN_CENTER, buf);
+        font_draw_fancy(SCREEN_W / 2, 104 - h * 0.5f, s, col_with_alpha(RGB(255, 255, 160), a),
+                        col_with_alpha(RGB(255, 170, 40), a), col_with_alpha(RGB(0, 0, 0), a),
+                        grow ? o * s / full : 3.0f, ALIGN_CENTER | (grow ? FONT_FREE : 0), buf);
     }
 }
 
@@ -581,14 +585,16 @@ static void draw_pause(const PlayState *ps)
 
     int idx = ps->level_idx < SAVE_MAX_LEVELS ? ps->level_idx : 0;
     char buf[48];
-    font_draw(UI_X(150), 130, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
+    float ty = font_center_y(130, 142, 2.0f); /* text beside the bars */
+    font_draw(UI_X(150), ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
     render_progress_bar(UI_X(250), 130, UI_X(440), 142, g->save.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best[idx]);
-    font_draw(UI_X(452), 130, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
-    font_draw(UI_X(150), 156, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
+    font_draw(UI_X(452), ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    ty = font_center_y(156, 168, 2.0f);
+    font_draw(UI_X(150), ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
     render_progress_bar(UI_X(250), 156, UI_X(440), 168, g->save.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best_practice[idx]);
-    font_draw(UI_X(452), 156, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(UI_X(452), ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
 
     const char *items[4] = {"RESUME", "RESTART", ps->practice ? "NORMAL MODE" : "PRACTICE MODE", "EXIT LEVEL"};
     for (int i = 0; i < 4; i++) {
@@ -610,10 +616,13 @@ static void draw_results(const PlayState *ps)
     const Game *g = &g_game;
     float t = ps->phase_t;
     if (t < 0.4f) return;
-    float s = 5.0f * (t < 0.7f ? ease_out_back((t - 0.4f) / 0.3f) : 1.0f);
-    if (draw_pixel_grid() > 0.0f) s = minf(s, 5.0f); /* as the NEW BEST popup (draw_hud) */
-    font_draw_fancy(SCREEN_W / 2, 70 - font_height(s) * 0.5f + 20, s, RGB(255, 255, 170), RGB(255, 170, 30),
-                    RGB(0, 0, 0), 3.0f * s / 5.0f, ALIGN_CENTER, "LEVEL COMPLETE!");
+    /* pops in like the NEW BEST popup (draw_hud) */
+    int grow = t < 0.7f;
+    float full = font_pixel(5.0f), o = grid_w(3.0f);
+    float s = grow ? full * ease_out_back((t - 0.4f) / 0.3f) : 5.0f;
+    float h = grow ? 7.0f * s : font_height(5.0f);
+    font_draw_fancy(SCREEN_W / 2, 90 - h * 0.5f, s, RGB(255, 255, 170), RGB(255, 170, 30), RGB(0, 0, 0),
+                    grow ? o * s / full : 3.0f, ALIGN_CENTER | (grow ? FONT_FREE : 0), "LEVEL COMPLETE!");
     if (t < 1.6f) return;
     float a = clampf((t - 1.6f) / 0.3f, 0.0f, 1.0f);
     render_panel(UI_X(140), 130, UI_X(500), 380, RGBA(10, 14, 30, (int)(220 * a)), RGBA(255, 255, 255, (int)(160 * a)));

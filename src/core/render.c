@@ -77,9 +77,9 @@ static void ground_band(const View *v, float gy, int dir, float alpha)
     gfx_rect_h(SCREEN_W - fade, y0, SCREEN_W, y0 + lw, lc, lt);
 
     /* its glow over the playfield, gone 14 px from the line, fading out
-     * towards the edges with it. Each end is two triangles from its bright
-     * inner corner (the glow there is as strong as the weaker of the two
-     * fades), so every backend splits it the same way. */
+     * towards the edges with it: towards an edge it gets fainter at every
+     * height, so it thins out as well. The ends are drawn in slices, each
+     * two triangles split the same way on every backend. */
     float glow = (0.25f + 0.35f * v->pulse) * alpha;
     gfx_blend(BLEND_ADD);
     Color gc = col_with_alpha(pal->ground_line, glow);
@@ -87,10 +87,16 @@ static void ground_band(const View *v, float gy, int dir, float alpha)
     float ye = gy - dir * 14.0f; /* where the glow ends */
     if (dir > 0) gfx_rect_v(fade, ye, SCREEN_W - fade, gy, gz, gc);
     else gfx_rect_v(fade, gy, SCREEN_W - fade, ye, gc, gz);
+    const int slices = 10;
     for (int side = 0; side < 2; side++) {
-        float xo = side ? SCREEN_W : 0.0f, xi = side ? SCREEN_W - fade : fade; /* outer, inner */
-        gfx_tri(xo, gy, gz, xi, gy, gc, xo, ye, gz);
-        gfx_tri(xi, gy, gc, xi, ye, gz, xo, ye, gz);
+        float xo = side ? SCREEN_W : 0.0f, step = (side ? -fade : fade) / slices; /* from the outer edge in */
+        for (int k = 0; k < slices; k++) {
+            float xa = xo + step * k, xb = xa + step;
+            Color ca = col_with_alpha(pal->ground_line, glow * k / slices);
+            Color cb = col_with_alpha(pal->ground_line, glow * (k + 1) / slices);
+            gfx_tri(xa, gy, ca, xb, gy, cb, xb, ye, gz);
+            gfx_tri(xa, gy, ca, xb, ye, gz, xa, ye, gz);
+        }
     }
     gfx_blend(BLEND_ALPHA);
 }
@@ -121,6 +127,17 @@ static void spike_glow(float sx, float sy_base, float w, float h, int down, Colo
         int j = (i + 1) % 3;
         gfx_tri(cx, cy, c, px[i], py[i], z, px[j], py[j], z);
     }
+}
+
+/* Glow in the square beyond a block's corner (x, y), reaching gw out along
+ * dx and dy (+-1): it fades out from the corner like the glow along the two
+ * sides beside it (as strong as the weaker of the two fades), so the glow
+ * goes round the corner. */
+static void corner_glow(float x, float y, float dx, float dy, float gw, Color gc, Color gz)
+{
+    float ox = x + dx * gw, oy = y + dy * gw;
+    gfx_tri(x, y, gc, ox, y, gz, ox, oy, gz);
+    gfx_tri(x, y, gc, ox, oy, gz, x, oy, gz);
 }
 
 void render_spike(float sx, float sy_base, float w, float h, int down, Color fill, Color edge)
@@ -303,6 +320,10 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
             if (e & EDGE_B) gfx_rect_v(x0, y1, x1, y1 + gw, gc, gz);
             if (e & EDGE_L) gfx_rect_h(x0 - gw, y0, x0, y1, gz, gc);
             if (e & EDGE_R) gfx_rect_h(x1, y0, x1 + gw, y1, gc, gz);
+            if ((e & EDGE_T) && (e & EDGE_L)) corner_glow(x0, y0, -1, -1, gw, gc, gz);
+            if ((e & EDGE_T) && (e & EDGE_R)) corner_glow(x1, y0, 1, -1, gw, gc, gz);
+            if ((e & EDGE_B) && (e & EDGE_L)) corner_glow(x0, y1, -1, 1, gw, gc, gz);
+            if ((e & EDGE_B) && (e & EDGE_R)) corner_glow(x1, y1, 1, 1, gw, gc, gz);
         }
     }
     {

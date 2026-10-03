@@ -14,6 +14,9 @@
 //   PD_FRAMES=1200                       stop after this many frames
 //   PD_QUIT=900                          choose HOME > Quit at this frame (runs the
 //                                        game's exit callback)
+//   PD_NUB=-1,0,300                      hold the analog nub at x,y (-1..1) from boot
+//                                        for that many frames, then centre it (a nub
+//                                        that reads off centre until it is moved)
 // Frames are counted at the PSP's 59.94 Hz from the emulated clock.
 //
 // This file is part of Pulse Dash (MIT license); built into PPSSPP it
@@ -46,6 +49,8 @@ struct Harness {
 	std::vector<Press> presses;
 	std::vector<unsigned> shots;
 	unsigned maxFrames = 0, quitFrame = 0;
+	float nubX = 0, nubY = 0;
+	unsigned nubFrames = 0;
 	bool quit = false;
 	int mark = -1;
 	unsigned frame = 0, nextFrame = 0; // the current frame, the first one not reached yet
@@ -97,6 +102,7 @@ void Init() {
 	}
 	if (const char *s = getenv("PD_FRAMES")) h.maxFrames = (unsigned)strtoul(s, nullptr, 10);
 	if (const char *s = getenv("PD_QUIT")) h.quitFrame = (unsigned)strtoul(s, nullptr, 10);
+	if (const char *s = getenv("PD_NUB")) sscanf(s, "%f,%f,%u", &h.nubX, &h.nubY, &h.nubFrames);
 	printf("harness: %d presses, %d shots, %u frames\n", (int)h.presses.size(), (int)h.shots.size(), h.maxFrames);
 }
 
@@ -154,6 +160,10 @@ void PdHarnessFrame() {
 		if (frame >= start && frame < start + p.length) held |= p.button;
 	}
 	__CtrlUpdateButtons(held, CTRL_MASK_USER & ~held);
+	if (h.nubFrames) {
+		bool stuck = frame < h.nubFrames;
+		__CtrlSetAnalogXY(CTRL_STICK_LEFT, stuck ? h.nubX : 0.0f, stuck ? h.nubY : 0.0f);
+	}
 
 	if (h.quitFrame && frame >= h.quitFrame && !h.quit) {
 		h.quit = true;

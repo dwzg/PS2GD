@@ -8,6 +8,7 @@
 static char s_pad_buf[2][256] __attribute__((aligned(64)));
 static int s_open[2];
 static int s_last_state[2], s_last_raw[2];
+static int s_stick_armed[2]; /* see stick_dpad() */
 
 int pad_ps2_init(int embedded)
 {
@@ -46,12 +47,7 @@ static uint32_t read_port(int port)
     if (d & PAD_START) b |= BTN_START;
     if (d & PAD_SELECT) b |= BTN_SELECT;
     /* left analog stick doubles as a d-pad when the pad reports analog data */
-    if ((st.mode >> 4) == 0x7) {
-        if (st.ljoy_h < 0x30) b |= BTN_LEFT;
-        if (st.ljoy_h > 0xD0) b |= BTN_RIGHT;
-        if (st.ljoy_v < 0x30) b |= BTN_UP;
-        if (st.ljoy_v > 0xD0) b |= BTN_DOWN;
-    }
+    if ((st.mode >> 4) == 0x7) b |= stick_dpad(st.ljoy_h, st.ljoy_v, &s_stick_armed[port]);
     return b;
 }
 
