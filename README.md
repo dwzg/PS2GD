@@ -1,0 +1,132 @@
+# Pulse Dash
+
+A Geometry Dash-style rhythm platformer for the **PlayStation 2**: tap to
+jump, hold to fly, and get through each level in one go, in time with the
+music.
+
+![Title screen](docs/screenshots/title.png)
+
+All levels, music, graphics and code in this repository are original. It
+recreates the *gameplay* of Geometry Dash (the vehicles, orbs, pads, portals,
+practice mode) but none of its copyrighted maps, songs or artwork. Not
+affiliated with RobTop Games; "Geometry Dash" is their trademark.
+
+![One frame from each level](docs/screenshots/levels.png)
+
+## Features
+
+- **6 levels**, Easy to Demon, each with its own song, palette changes and 3
+  secret coins: Neon Steps, Skyward Pulse, Gravity Garden, Saucer Groove,
+  Wave Rider, Prism Overdrive.
+- **5 vehicles**: cube, ship, ball, UFO and wave, plus gravity flips and four
+  speeds.
+- Yellow/pink/blue/green **orbs**, yellow/pink/blue **pads**, spikes, saws.
+- **Practice mode** with checkpoints, attempt counter, best-percent tracking,
+  pause menu, level-complete stats.
+- **Garage**: 8 cube designs, 14 colours, previews of every vehicle.
+- **Original soundtrack, synthesized live**: a small software synth (supersaw
+  leads, plucks, filtered bass, drums with sidechain, echo) plays 8 original
+  tracks from note data in `src/core/songs.c`. No audio files ship with the
+  game.
+- **Memory card saves** (`mc0:/PULSEDASH`, with a browser icon), falling back
+  to the second slot.
+- Vector graphics drawn entirely from GS primitives (no textures), 640x448
+  NTSC, PAL supported.
+
+## Controls
+
+| Button | Action |
+|--------|--------|
+| ✕ / ○ / ↑ / L1 / R1 | Jump; hold to fly (ship) or climb (wave) |
+| START | Pause |
+| □ (practice) | Place checkpoint |
+| △ (practice) | Remove last checkpoint |
+| ✕ / □ / ○ in the level menu | Play / practice / back |
+
+## Running it
+
+**On a PS2:** copy `pulsedash-packed.elf` to a USB stick and launch it with
+wLaunchELF/uLaunchELF (for example from FreeMcBoot), or from OPL's apps list.
+Any controller in port 1 or 2 works; progress is saved to the memory card
+in slot 1 (or slot 2).
+
+**In an emulator:** [Play!](https://purei.org) boots the ELF directly
+(File > Boot ELF), no BIOS needed. PCSX2 can boot it too ("Run ELF") with
+your own BIOS dump.
+
+**On a PC:** the same game builds as an SDL2 program (keyboard: Space/Up to
+jump, Esc to pause, Q/E for checkpoints, Backspace to go back; gamepads
+work too).
+
+## Building
+
+PS2, using the official toolchain image (needs Docker):
+
+```sh
+scripts/build-ps2.sh          # -> build/ps2/pulsedash.elf and pulsedash-packed.elf
+```
+
+or with a local [ps2dev](https://github.com/ps2dev/ps2dev) install
+(`PS2DEV`, `PS2SDK`, `GSKIT` set): `make`.
+
+PC version and developer tools (needs SDL2):
+
+```sh
+make -f Makefile.host         # -> build/host/pulsedash, build/host/pd_tool
+build/host/pulsedash
+```
+
+GitHub Actions builds the ELF (uploaded as an artifact) and runs the tests
+on every push.
+
+## Testing
+
+```sh
+make -f Makefile.host test        # data checks, smoke test, solver, coins (~1 min)
+make -f Makefile.host test-full   # also proves levels beatable at 30 and 20 Hz input
+scripts/emu-test.sh               # run the real PS2 ELF in the Play! core, headless
+```
+
+`pd_tool` contains a level solver: a breadth-first search over button
+presses that proves every level can be finished, that it can be finished
+when inputs only change at 20 Hz (no frame-perfect tricks), that every
+portal is mandatory, and that all three coins can be collected in one run.
+All six levels pass at every input phase.
+
+`scripts/emu-test.sh` builds a small harness around the
+[Play!](https://github.com/jpd002/Play-) emulator core, boots the PS2 ELF,
+presses buttons on a schedule and prints the game's log. With
+`PD_SHOTS=150,300` it also renders through Play!'s OpenGL GS on a headless
+Mesa context and saves screenshots. These frames come from the PS2 build:
+
+![PS2 build running in the Play! core](docs/screenshots/ps2-emulator.png)
+
+That harness found two problems that would also have hit real hardware:
+the open-source pad driver stalled, so the game now uses the BIOS pad and
+memory card modules, and the audio thread was starved by the game loop's
+vsync busy-wait, so the loop now runs at a lower priority.
+
+## Making levels
+
+Levels are ASCII art in `src/levels/*.c`; see
+[docs/LEVEL_FORMAT.md](docs/LEVEL_FORMAT.md) for the tile set, physics rules
+of thumb and the checking workflow.
+
+## Layout
+
+```
+src/core/     portable game: physics (sim.c), levels, rendering, menus,
+              synth + songs, saves. Plain C99, single-precision floats only.
+src/levels/   the six levels
+src/ps2/      PS2 frontend: gsKit renderer, audsrv streaming thread,
+              libpad, libmc saves + browser icon, boot/module loading
+src/host/     SDL2 frontend and pd_tool (solver, screenshots, WAV export)
+tools/play-harness/   emulator test harness (used by scripts/emu-test.sh)
+```
+
+## Status
+
+Tested in the Play! emulator core (boot, module loading, controller input,
+audio streaming, memory card save/load and GS rendering) and on PC. It has
+not yet been run on real PS2 hardware or in PCSX2. The memory card browser
+icon and 50 Hz PAL timing are implemented but untested.

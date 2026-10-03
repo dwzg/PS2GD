@@ -1,6 +1,7 @@
 # PC build (SDL2) and developer tool.
 #   make -f Makefile.host            -> build/host/pulsedash, build/host/pd_tool
-#   make -f Makefile.host test       -> data checks, solver, smoke test
+#   make -f Makefile.host test       -> data checks, smoke test, every level solved, coins
+#   make -f Makefile.host test-full  -> also prove levels beatable at 30 and 20 Hz input
 
 CC ?= cc
 SDL_CFLAGS := $(shell sdl2-config --cflags)
@@ -31,10 +32,14 @@ $(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h)
 
 test: $(OUT)/pd_tool
 	$(OUT)/pd_tool check
-	$(OUT)/pd_tool solve all 2
 	$(OUT)/pd_tool smoke
+	$(OUT)/pd_tool solve all 1
+	$(OUT)/pd_tool coins all
+
+test-full: test
+	$(OUT)/pd_tool solve all 3
 
 clean:
 	rm -rf $(OUT)
 
-.PHONY: all test clean
+.PHONY: all test test-full clean

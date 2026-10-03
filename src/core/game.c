@@ -451,7 +451,7 @@ static void garage_render(void)
     font_draw_fancy(SCREEN_W / 2, 20, 4.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, "GARAGE");
 
     /* vehicle previews */
-    render_panel(60, 60, 580, 170, RGBA(0, 0, 0, 140), RGBA(255, 255, 255, 90));
+    render_panel(60, 60, 580, 170, RGBA(0, 0, 0, 180), RGBA(255, 255, 255, 90));
     static const char *mnames[MODE_COUNT] = {"CUBE", "SHIP", "BALL", "UFO", "WAVE"};
     for (int m = 0; m < MODE_COUNT; m++) {
         float cx = 112 + m * 104;
@@ -468,14 +468,14 @@ static void garage_render(void)
     for (int r = 0; r < 3; r++) {
         float y = 200 + r * 72;
         int sel = g->garage_row == r;
-        render_panel(40, y - 6, 600, y + 58, RGBA(0, 0, 0, sel ? 170 : 110), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
+        render_panel(40, y - 6, 600, y + 58, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
         font_draw(56, y + 2, 2.0f, sel ? COL_WHITE : RGB(160, 170, 190), ALIGN_LEFT, rows[r]);
         if (r == 0) {
             for (int i = 0; i < ICON_COUNT; i++) {
-                float cx = 80 + i * 66, cy = y + 34;
+                float cx = 80 + i * 66, cy = y + 37;
                 int on = g->save.icon == i;
-                if (on) gfx_rect(cx - 25, cy - 25, cx + 25, cy + 25, RGB(120, 255, 150));
-                icon_draw_cube(cx, cy, on ? 40 : 34, 0.0f, i, c1_of(), c2_of());
+                if (on) gfx_rect(cx - 20, cy - 20, cx + 20, cy + 20, RGB(120, 255, 150));
+                icon_draw_cube(cx, cy, on ? 34 : 28, 0.0f, i, c1_of(), c2_of());
             }
             font_draw(590, y + 2, 2.0f, RGB(255, 240, 160), ALIGN_RIGHT, g_icon_names[g->save.icon % ICON_COUNT]);
         } else {
@@ -550,7 +550,7 @@ static void options_render(void)
     for (int i = 0; i < 4; i++) {
         float y = 72 + i * 46;
         int sel = g->options_sel == i;
-        render_panel(110, y - 8, 530, y + 30, RGBA(0, 0, 0, sel ? 170 : 110), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
+        render_panel(110, y - 8, 530, y + 30, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
         Color tc = i == 2 && g->erase_confirm ? RGB(255, 120, 120) : (sel ? COL_WHITE : RGB(170, 180, 200));
         font_draw(130, y + 2, 3.0f, tc, ALIGN_LEFT, labels[i]);
         if (i < 2) {
@@ -569,7 +569,7 @@ static void options_render(void)
         if (g->save.best[i] >= 100) done++;
         for (int k = 0; k < 3; k++) coins += (g->save.coins[i] >> k) & 1;
     }
-    render_panel(60, 262, 580, 420, RGBA(0, 0, 0, 120), RGBA(255, 255, 255, 60));
+    render_panel(60, 262, 580, 420, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
     font_draw(80, 276, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "CONTROLS");
     font_draw(80, 298, 2.0f, COL_WHITE, ALIGN_LEFT, GLYPH_CROSS " / " GLYPH_CIRCLE " / UP / L1 / R1  JUMP, HOLD TO FLY");
     font_draw(80, 316, 2.0f, COL_WHITE, ALIGN_LEFT, "START  PAUSE");
