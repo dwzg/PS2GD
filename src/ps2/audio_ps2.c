@@ -11,7 +11,6 @@
 #include <delaythread.h>
 #include <stdio.h>
 #include <audsrv.h>
-#include <ps2_audio_driver.h>
 
 #include "ps2_platform.h"
 #include "../core/audio.h"
@@ -77,9 +76,9 @@ void audio_ps2_debug(int *loops, int *avail, int *queued)
 
 int audio_ps2_init(void)
 {
-    int ret = init_audio_driver();
-    if (ret < 0) {
-        printf("pulsedash: audio driver failed (%d)\n", ret);
+    if (irx_load_audio() < 0) return -1;
+    if (audsrv_init() != 0) {
+        printf("pulsedash: audsrv_init failed\n");
         return -1;
     }
     struct audsrv_fmt_t fmt;

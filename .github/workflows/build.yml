@@ -66,10 +66,28 @@ jobs:
         run: |
           ver="$GITHUB_REF_NAME"
           mkdir -p "pkg/pulsedash-$ver"
-          cp dist/pulsedash-packed.elf dist/pulsedash.elf README.md "pkg/pulsedash-$ver/"
+          cp dist/pulsedash-packed.elf dist/pulsedash.elf README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md \
+             "pkg/pulsedash-$ver/"
           (cd pkg && zip -r "../dist/pulsedash-$ver.zip" "pulsedash-$ver")
           (cd dist && sha256sum pulsedash-packed.elf pulsedash.elf "pulsedash-$ver.zip" > SHA256SUMS)
           ls -l dist
+      - name: Release notes
+        run: |
+          ver="$GITHUB_REF_NAME"
+          # this version's section of CHANGELOG.md ("## [1.0.0] - date" up to the next heading)
+          awk -v h="## [${ver#v}]" 'index($0, h) == 1 { on = 1; next }
+                                   on && (/^## / || /^\[[^]]*\]: /) { exit }
+                                   on { print }' CHANGELOG.md > changes.md
+          if ! grep -q '[^[:space:]]' changes.md; then
+            echo "::warning::CHANGELOG.md has no section for ${ver#v}"
+          fi
+          {
+            echo "Copy \`pulsedash-packed.elf\` to a USB stick and start it from wLaunchELF / uLaunchELF or"
+            echo "OPL's apps list, or boot it in an emulator (Play! or PCSX2). \`pulsedash.elf\` is the same game"
+            echo "unpacked; the zip holds both ELFs with the README, changelog and licenses."
+            cat changes.md
+          } > notes.md
+          cat notes.md
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,7 +95,6 @@ jobs:
           ver="$GITHUB_REF_NAME"
           pre=""
           case "$ver" in *-*) pre="--prerelease" ;; esac
-          notes="Copy \`pulsedash-packed.elf\` to a USB stick and start it from wLaunchELF / uLaunchELF or OPL's apps list, or boot it in an emulator (Play! or PCSX2). \`pulsedash.elf\` is the same game unpacked; the zip holds both ELFs and the README."
           gh release create "$ver" --repo "$GITHUB_REPOSITORY" --verify-tag $pre \
-            --title "Pulse Dash $ver" --notes "$notes" --generate-notes \
+            --title "Pulse Dash $ver" --notes "$(cat notes.md)" --generate-notes \
             dist/pulsedash-packed.elf dist/pulsedash.elf "dist/pulsedash-$ver.zip" dist/SHA256SUMS

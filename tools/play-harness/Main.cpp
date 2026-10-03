@@ -1,6 +1,7 @@
 // Pulse Dash headless test harness built on the Play! PS2 emulator core
-// (https://github.com/jpd002/Play-, BSD licensed). Built by scripts/emu-test.sh,
-// which drops this file in place of Play!'s tools/AutoTest/Main.cpp.
+// (https://github.com/jpd002/Play-). Built by scripts/emu-test.sh, which drops
+// this file in place of Play!'s tools/AutoTest/Main.cpp. Adapted from Play!'s
+// AutoTest and under its BSD license: see LICENSE in this directory.
 //
 // Usage: autotest <game.elf> <seconds> [script]
 //   script: comma separated "frame:BUTTON:frames" presses, e.g. "300:CROSS:5,420:CROSS:5".

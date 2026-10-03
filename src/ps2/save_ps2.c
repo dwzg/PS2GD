@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <libmc.h>
-#include <ps2_memcard_driver.h>
 
 #include "ps2_platform.h"
 #include "../core/platform.h"
@@ -28,13 +27,7 @@ static uint8_t s_icon[48 * 1024] __attribute__((aligned(64)));
 
 int save_ps2_init(int embedded)
 {
-    if (embedded) {
-        int ret = init_memcard_driver(true);
-        if (ret < 0) {
-            printf("pulsedash: memcard driver failed (%d)\n", ret);
-            return -1;
-        }
-    }
+    if (embedded && irx_load_memcard() < 0) return -1;
     if (mcInit(embedded ? MC_TYPE_XMC : MC_TYPE_MC) < 0) {
         printf("pulsedash: mcInit failed\n");
         return -1;

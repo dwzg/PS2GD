@@ -2,7 +2,6 @@
 #include <kernel.h>
 #include <stdio.h>
 #include <libpad.h>
-#include <ps2_joystick_driver.h>
 
 #include "ps2_platform.h"
 
@@ -12,14 +11,8 @@ static int s_last_state[2], s_last_raw[2];
 
 int pad_ps2_init(int embedded)
 {
-    if (embedded) {
-        /* ps2_drivers loads sio2man/padman from the ELF and calls padInit */
-        int ret = init_joystick_driver(true);
-        if (ret < 0) {
-            printf("pulsedash: joystick driver failed (%d)\n", ret);
-            return -1;
-        }
-    } else if (padInit(0) != 1) {
+    if (embedded && irx_load_pad() < 0) return -1;
+    if (padInit(0) != 1) {
         printf("pulsedash: padInit failed\n");
         return -1;
     }

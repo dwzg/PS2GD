@@ -13,7 +13,12 @@ void gfx_ps2_submit(void);
 /* Show the submitted frame. Call right after a vblank has started. */
 void gfx_ps2_flip(void);
 
-/* embedded = modules were not loaded from the BIOS; use ps2_drivers. */
+/* IOP modules embedded in the ELF (irx.c). */
+int irx_load_audio(void);   /* libsd + audsrv */
+int irx_load_pad(void);     /* sio2man + padman */
+int irx_load_memcard(void); /* sio2man + mcman + mcserv */
+
+/* embedded = the BIOS modules did not load; use the ones in the ELF. */
 int pad_ps2_init(int embedded);
 uint32_t pad_ps2_read(void);
 void pad_ps2_debug(int *state0, int *raw0, int *open0);

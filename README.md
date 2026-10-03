@@ -1,15 +1,16 @@
 # Pulse Dash
 
-A Geometry Dash-style rhythm platformer for the **PlayStation 2**: tap to
-jump, hold to fly, and get through each level in one go, in time with the
-music.
+A rhythm platformer for the **PlayStation 2**, inspired by Geometry Dash:
+tap to jump, hold to fly, and get through each level in one go, in time
+with the music.
 
 ![Title screen](docs/screenshots/title.png)
 
-All levels, music, graphics and code in this repository are original. It
-recreates the *gameplay* of Geometry Dash (the vehicles, orbs, pads, portals,
-practice mode) but none of its copyrighted maps, songs or artwork. Not
-affiliated with RobTop Games; "Geometry Dash" is their trademark.
+All levels, music, graphics and code in this repository are original. The
+game plays like Geometry Dash (the vehicles, orbs, pads, portals, practice
+mode) but contains none of its levels, songs, artwork, names or code. It is
+an unofficial fan project, not affiliated with or endorsed by RobTop Games;
+"Geometry Dash" is their trademark.
 
 ![One frame from each level](docs/screenshots/levels.png)
 
@@ -95,17 +96,19 @@ on every push.
 
 ### Releases
 
-Push a version tag and CI publishes a GitHub release once the tests and the
-PS2 build pass:
+Describe the version in [CHANGELOG.md](CHANGELOG.md) (a `## [1.1.0] - date`
+section), then push a version tag; CI publishes a GitHub release once the
+tests and the PS2 build pass:
 
 ```sh
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
 The release carries `pulsedash-packed.elf`, `pulsedash.elf`, a zip with both
-and the README, and `SHA256SUMS`, with notes generated from the merged pull
-requests. Tags with a hyphen (`v1.1.0-rc1`) become pre-releases.
+plus the README, changelog and licenses, and `SHA256SUMS`. Its notes are the
+version's changelog section followed by the merged pull requests. Tags with
+a hyphen (`v1.1.0-rc1`) become pre-releases.
 
 ## Testing
 
@@ -175,3 +178,10 @@ tools/beat_align.py   moves a level's obstacles onto the beat of its song
 Runs on real PS2 hardware, in the Play! emulator core (boot, module loading,
 controller input, audio streaming, memory card save/load and GS rendering)
 and on PC. Not yet tried in PCSX2.
+
+## License
+
+[MIT](LICENSE). The libraries the builds use, and the trademarks mentioned
+here, are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the
+emulator test harness keeps Play!'s BSD license. Changes are tracked in
+[CHANGELOG.md](CHANGELOG.md).
