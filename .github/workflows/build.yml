@@ -1,8 +1,8 @@
 name: build
 
-# Every push and pull request: build the PS2 ELF and run the level tests.
-# Pushing a version tag (v1.2.0, or v1.3.0-rc1 for a pre-release) also
-# publishes a GitHub release with the ELFs once both jobs pass.
+# Every push and pull request: build the PS2 ELF and the PSP EBOOT and run
+# the level tests. Pushing a version tag (v1.2.0, or v1.3.0-rc1 for a
+# pre-release) also publishes a GitHub release with both once all jobs pass.
 on:
   push:
     branches: ['**']
@@ -33,6 +33,26 @@ jobs:
           name: pulsedash-ps2
           path: build/ps2/PULSEDASH.ELF
 
+  psp:
+    name: PSP EBOOT
+    runs-on: ubuntu-latest
+    container: pspdev/pspdev:latest
+    steps:
+      - name: Install build tools
+        run: apk add --no-cache make git
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the version shown on the title screen
+      - name: Build
+        run: |
+          # the checkout belongs to another user than the container's root
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          make -f Makefile.psp -j"$(nproc)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulsedash-psp
+          path: build/psp/EBOOT.PBP
+
   host:
     name: PC build and level tests
     runs-on: ubuntu-latest
@@ -46,11 +66,16 @@ jobs:
         run: make -f Makefile.host -j"$(nproc)"
       - name: Test (data checks, smoke test, solver, rhythm, coins, contrast)
         run: make -f Makefile.host test
+      - name: Test the PSP's widescreen layout (smoke test, title screen demo)
+        run: |
+          make -f Makefile.host PSP=1 -j"$(nproc)"
+          build/host-psp/pd_tool smoke
+          build/host-psp/pd_tool demo
 
   release:
     name: GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ps2, host]
+    needs: [ps2, psp, host]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -60,13 +85,22 @@ jobs:
         with:
           name: pulsedash-ps2
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: pulsedash-psp
+          path: psp
       - name: Package
         run: |
           ver="$GITHUB_REF_NAME"
           mkdir -p "pkg/pulsedash-$ver"
           cp dist/PULSEDASH.ELF README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "pkg/pulsedash-$ver/"
           (cd pkg && zip -r "../dist/pulsedash-$ver.zip" "pulsedash-$ver")
-          (cd dist && sha256sum PULSEDASH.ELF "pulsedash-$ver.zip" > SHA256SUMS)
+          # PSP: the folder layout of the memory stick, ready to unzip onto it
+          mkdir -p "pkg-psp/PSP/GAME/PulseDash"
+          cp psp/EBOOT.PBP "pkg-psp/PSP/GAME/PulseDash/"
+          cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "pkg-psp/PSP/GAME/PulseDash/"
+          (cd pkg-psp && zip -r "../dist/pulsedash-$ver-psp.zip" PSP)
+          (cd dist && sha256sum PULSEDASH.ELF "pulsedash-$ver.zip" "pulsedash-$ver-psp.zip" > SHA256SUMS)
           ls -l dist
       - name: Release notes
         run: |
@@ -79,9 +113,14 @@ jobs:
             echo "::warning::CHANGELOG.md has no section for ${ver#v}"
           fi
           {
-            echo "Copy \`PULSEDASH.ELF\` to a USB stick or memory card and start it from wLaunchELF /"
-            echo "uLaunchELF or OPL's apps list, or boot it in an emulator (Play! or PCSX2). The zip holds"
-            echo "the same ELF with the README, changelog and licenses."
+            echo "**PS2:** copy \`PULSEDASH.ELF\` to a USB stick or memory card and start it from wLaunchELF /"
+            echo "uLaunchELF or OPL's apps list, or boot it in an emulator (Play! or PCSX2). \`pulsedash-$ver.zip\`"
+            echo "holds the same ELF with the README, changelog and licenses."
+            echo ""
+            echo "**PSP:** unzip \`pulsedash-$ver-psp.zip\` onto the memory stick (it creates"
+            echo "\`PSP/GAME/PulseDash/EBOOT.PBP\`) and start Pulse Dash from the Game menu, on a PSP with custom"
+            echo "firmware, a PS Vita with Adrenaline, or in PPSSPP."
+            echo ""
             cat changes.md
           } > notes.md
           cat notes.md
@@ -94,4 +133,4 @@ jobs:
           case "$ver" in *-*) pre="--prerelease" ;; esac
           gh release create "$ver" --repo "$GITHUB_REPOSITORY" --verify-tag $pre \
             --title "Pulse Dash $ver" --notes "$(cat notes.md)" --generate-notes \
-            dist/PULSEDASH.ELF "dist/pulsedash-$ver.zip" dist/SHA256SUMS
+            dist/PULSEDASH.ELF "dist/pulsedash-$ver.zip" "dist/pulsedash-$ver-psp.zip" dist/SHA256SUMS

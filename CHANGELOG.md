@@ -7,6 +7,22 @@ section from this file as release notes.
 
 ## [Unreleased]
 
+### Added
+
+- A PSP version: `EBOOT.PBP` for a PSP with custom firmware, a PS Vita with
+  Adrenaline, or PPSSPP. It fills the PSP's 16:9 screen (levels show more of
+  what is ahead, menus are centred for it), draws text on whole pixels of
+  the 480x272 LCD so it stays sharp, plays the synthesized soundtrack at
+  48 kHz, and saves progress next to the game on the memory stick. HOME >
+  Quit saves before exiting. The XMB icon and background are drawn by the
+  game's own renderer.
+- Releases also carry a PSP zip that unpacks to `PSP/GAME/PulseDash/`.
+- The PC version and tools can be built in the PSP's layout
+  (`make -f Makefile.host PSP=1`); `pd_tool` writes PNG images and takes an
+  output width for menu screenshots.
+- `scripts/psp-emu-test.sh` runs the PSP build in PPSSPP's headless runner
+  with scripted button presses and screenshots.
+
 ## [1.0.0] - 2026-10-03
 
 First release.

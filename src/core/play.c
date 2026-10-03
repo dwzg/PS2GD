@@ -357,7 +357,8 @@ static void spawn_firework(PlayState *ps)
     static const Color cols[5] = {RGB(255, 220, 60), RGB(80, 255, 140), RGB(80, 200, 255),
                                   RGB(255, 100, 220), RGB(255, 255, 255)};
     uint32_t h = hash_u32((uint32_t)(ps->phase_t * 1000.0f) + 77u);
-    float x = ps->cam_x + 3.0f + hash_f01(h) * 13.0f;
+    const float k = SCREEN_W / 640.0f; /* across the screen, however wide */
+    float x = ps->cam_x + 3.0f * k + hash_f01(h) * 13.0f * k;
     float y = ps->cam_y + 5.0f + hash_f01(h >> 5) * 6.0f;
     Color c = cols[h % 5];
     fx_burst(FX_WORLD, x, y, 22, 9.0f, 0.18f, 1.0f, c, 1);
@@ -539,7 +540,7 @@ static void draw_hud(const PlayState *ps)
 {
     float frac = ps->p.x / ps->L->end_x;
     if (ps->phase == PH_COMPLETE) frac = 1.0f;
-    float x0 = 180, x1 = 440;
+    float x0 = UI_X(180), x1 = UI_X(440);
     render_progress_bar(x0, 14, x1, 24, frac, RGB(90, 255, 120), RGB(255, 255, 255));
     char buf[32];
     snprintf(buf, sizeof(buf), "%d%%", clampi((int)(frac * 100.0f), 0, 100));
@@ -569,26 +570,26 @@ static void draw_pause(const PlayState *ps)
 {
     const Game *g = &g_game;
     gfx_rect(0, 0, SCREEN_W, SCREEN_H, RGBA(0, 0, 0, 150));
-    render_panel(120, 60, 520, 400, RGBA(10, 14, 30, 230), RGBA(255, 255, 255, 160));
+    render_panel(UI_X(120), 60, UI_X(520), 400, RGBA(10, 14, 30, 230), RGBA(255, 255, 255, 160));
     font_draw_fancy(SCREEN_W / 2, 80, 4.0f, COL_WHITE, RGB(190, 210, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, ps->info.name);
 
     int idx = ps->level_idx < SAVE_MAX_LEVELS ? ps->level_idx : 0;
     char buf[48];
-    font_draw(150, 130, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
-    render_progress_bar(250, 130, 440, 142, g->save.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
+    font_draw(UI_X(150), 130, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
+    render_progress_bar(UI_X(250), 130, UI_X(440), 142, g->save.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best[idx]);
-    font_draw(452, 130, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
-    font_draw(150, 156, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
-    render_progress_bar(250, 156, 440, 168, g->save.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
+    font_draw(UI_X(452), 130, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(UI_X(150), 156, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
+    render_progress_bar(UI_X(250), 156, UI_X(440), 168, g->save.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best_practice[idx]);
-    font_draw(452, 156, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(UI_X(452), 156, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
 
     const char *items[4] = {"RESUME", "RESTART", ps->practice ? "NORMAL MODE" : "PRACTICE MODE", "EXIT LEVEL"};
     for (int i = 0; i < 4; i++) {
         float y = 196 + i * 42;
         int sel = i == ps->pause_sel;
         if (sel) {
-            render_panel(170, y - 8, 470, y + 30, RGBA(255, 255, 255, 40), RGB(120, 255, 150));
+            render_panel(UI_X(170), y - 8, UI_X(470), y + 30, RGBA(255, 255, 255, 40), RGB(120, 255, 150));
         }
         font_draw_fancy(SCREEN_W / 2, y, 3.0f, sel ? RGB(255, 255, 255) : RGB(170, 180, 200),
                         sel ? RGB(150, 255, 170) : RGB(110, 120, 140), RGB(0, 0, 0), 2.0f, ALIGN_CENTER, items[i]);
@@ -608,7 +609,7 @@ static void draw_results(const PlayState *ps)
                     ALIGN_CENTER, "LEVEL COMPLETE!");
     if (t < 1.6f) return;
     float a = clampf((t - 1.6f) / 0.3f, 0.0f, 1.0f);
-    render_panel(140, 130, 500, 380, RGBA(10, 14, 30, (int)(220 * a)), RGBA(255, 255, 255, (int)(160 * a)));
+    render_panel(UI_X(140), 130, UI_X(500), 380, RGBA(10, 14, 30, (int)(220 * a)), RGBA(255, 255, 255, (int)(160 * a)));
     char buf[64];
     snprintf(buf, sizeof(buf), "ATTEMPTS: %d", ps->attempt);
     font_draw(SCREEN_W / 2, 152, 3.0f, COL_WHITE, ALIGN_CENTER, buf);

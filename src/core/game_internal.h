@@ -120,7 +120,10 @@ void play_draw_player(const PlayState *ps, const View *v);
  * of the menu song at normal speed; at x = DEMO_WRAP the run moves back by
  * DEMO_LOOP, onto the same view */
 #define DEMO_LOOP 180
-#define DEMO_TAIL 24 /* the loop's first columns, repeated after it */
+/* the loop's first columns, repeated after it: enough to fill the screen
+ * until the run wraps, with the level's end gate (and its glow) beyond the
+ * right edge (34 = BLOCK_PX) */
+#define DEMO_TAIL (24 + (SCREEN_W - 640 + 33) / 34)
 #define DEMO_WRAP (DEMO_LOOP + 8.0f)
 const char *const *demo_level_src(void);
 /* beat: the menu song's beat as heard, or NULL if unknown; returns 1 if the run died */

@@ -4,6 +4,10 @@
 #                                       playable on the beat, coins, palette contrast,
 #                                       the title screen's demo run
 #   make -f Makefile.host test-full  -> also prove levels beatable at 30 and 20 Hz input
+#   make -f Makefile.host PSP=1 ...  -> the same in the PSP's widescreen layout, in
+#                                       build/host-psp/ (to try it on a PC)
+#   make -f Makefile.host PSP=1 psp-art  -> redraw the PSP's XMB icon and background
+#                                       (src/psp/ICON0.PNG, PIC1.PNG)
 
 CC ?= cc
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -13,11 +17,16 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion $(SDL_CFLAGS)
 LDLIBS := $(SDL_LIBS) -lm
 
+ifeq ($(PSP),1)
+CFLAGS += -DPD_PSP
+OUT := build/host-psp
+else
 OUT := build/host
+endif
 CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c)
 CORE_OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC))
 GAME_OBJ := $(OUT)/host/main_sdl.o $(OUT)/host/gfx_sdl.o
-TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/gfx_sdl.o
+TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o
 
 all: $(OUT)/pulsedash $(OUT)/pd_tool
 
@@ -50,7 +59,11 @@ test: $(OUT)/pd_tool
 test-full: test
 	$(OUT)/pd_tool solve all 3
 
+psp-art: $(OUT)/pd_tool
+	@test "$(PSP)" = 1 || { echo "psp-art needs PSP=1"; exit 1; }
+	$(OUT)/pd_tool xmb src/psp/ICON0.PNG src/psp/PIC1.PNG
+
 clean:
 	rm -rf $(OUT)
 
-.PHONY: all test test-full clean FORCE
+.PHONY: all test test-full psp-art clean FORCE

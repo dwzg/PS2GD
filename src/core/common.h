@@ -16,8 +16,32 @@
 
 #define GAME_TITLE "PULSE DASH"
 
+/*
+ * Target profile. The default is the PS2's (the PC build plays the same):
+ * a 640x448 virtual screen. PD_PSP selects the PSP's: its 480x272 screen is
+ * wider, so the virtual screen is too (levels show more of what is ahead,
+ * menus laid out for 640 stay centred through UI_X), text is drawn on the
+ * PSP's pixel grid so it stays sharp when scaled down (font.c), and help
+ * texts name the PSP's buttons.
+ */
+#ifdef PD_PSP
+#define SCREEN_W 790 /* 448 * 480 / 272 */
+#define TARGET_NAME "PSP"
+#define BTN_NAME_L "L"
+#define BTN_NAME_R "R"
+#define PIXEL_GRID_X (480.0f / SCREEN_W) /* device pixels per virtual pixel */
+#define PIXEL_GRID_Y (272.0f / SCREEN_H)
+#else
 #define SCREEN_W 640
+#define TARGET_NAME "PLAYSTATION 2"
+#define BTN_NAME_L "L1"
+#define BTN_NAME_R "R1"
+#endif
 #define SCREEN_H 448
+
+/* x in a layout drawn for a 640-wide screen, centred on this one */
+#define UI_X(x) ((x) + (SCREEN_W - 640) / 2)
+
 #define TICK_HZ 60
 #define TICK_DT (1.0f / TICK_HZ)
 

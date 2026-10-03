@@ -1,0 +1,60 @@
+# PSP build (requires the pspdev toolchain: psp-gcc and psp-config on PATH).
+#   make -f Makefile.psp                 -> build/psp/EBOOT.PBP, the game: copy it to
+#                                           ms0:/PSP/GAME/PulseDash/ on the memory stick
+#   make -f Makefile.psp PERF=1          -> build/psp-perf/..., logging per-frame timings
+#   make -f Makefile.psp VERSION=v1.2.0  -> version shown on the title screen (default: git describe)
+#   ./scripts/build-psp.sh               runs this inside the pspdev/pspdev Docker image
+#
+# The XMB icon and background (src/psp/ICON0.PNG, PIC1.PNG) are drawn by the
+# game's own renderer: make -f Makefile.host PSP=1 psp-art redraws them.
+
+PSPSDK := $(shell psp-config --pspsdk-path)
+PSPDEV := $(shell psp-config --pspdev-path)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+OUT := build/psp$(if $(filter 1,$(PERF)),-perf)
+SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c) $(wildcard src/psp/*.c)
+OBJS := $(patsubst src/%.c,$(OUT)/%.o,$(SRC))
+
+CC := psp-gcc
+CFLAGS := -O2 -G0 -g -std=gnu99 -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion \
+          -DPD_PSP -D_PSP_FW_VERSION=600 -I$(PSPSDK)/include -I$(PSPDEV)/psp/include \
+          $(if $(filter 1,$(PERF)),-DPD_PERF)
+LDFLAGS := -L$(PSPSDK)/lib -L$(PSPDEV)/psp/lib -specs=$(PSPSDK)/lib/prxspecs \
+           -Wl,-q,-T$(PSPSDK)/lib/linkfile.prx -Wl,-zmax-page-size=128
+LIBS := -lpspgu -lpspaudio -lpsppower -lpspdisplay -lpspge -lpspctrl -lm
+
+all: $(OUT)/EBOOT.PBP
+
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/psp/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# printf of floats in the perf report
+$(OUT)/psp/main_psp.o: CFLAGS += -Wno-double-promotion
+
+# the version is compiled into one small object, rebuilt every time
+$(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
+$(OUT)/core/version.o: FORCE
+FORCE:
+
+# pulsedash.elf keeps the debug info; the PRX inside the EBOOT leaves it out
+$(OUT)/pulsedash.elf: $(OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(PSPSDK)/lib/prxexports.o $(LIBS) -o $@
+	psp-fixup-imports $@
+
+$(OUT)/pulsedash.prx: $(OUT)/pulsedash.elf
+	psp-prxgen $< $@
+
+$(OUT)/PARAM.SFO:
+	@mkdir -p $(dir $@)
+	mksfoex 'Pulse Dash' $@
+
+$(OUT)/EBOOT.PBP: $(OUT)/pulsedash.prx $(OUT)/PARAM.SFO src/psp/ICON0.PNG src/psp/PIC1.PNG
+	pack-pbp $@ $(OUT)/PARAM.SFO src/psp/ICON0.PNG NULL NULL src/psp/PIC1.PNG NULL $(OUT)/pulsedash.prx NULL
+	@echo "built: $@"
+
+clean:
+	rm -rf $(OUT)
+
+.PHONY: all clean FORCE

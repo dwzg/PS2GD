@@ -17,8 +17,15 @@ enum { ALIGN_LEFT = 0, ALIGN_CENTER = 1, ALIGN_RIGHT = 2 };
 
 void font_init(void);
 
+/* Draw text on a pixel grid of gx x gy device pixels per virtual pixel
+ * (0, 0 = off): font pixels become whole device pixels. Builds for a target
+ * that scales the virtual screen down start with its grid (common.h). */
+void font_set_pixel_grid(float gx, float gy);
+
 /* Width in pixels of a string at the given pixel scale. */
 float font_width(const char *s, float scale);
+/* Height of the glyphs at the given pixel scale. */
+float font_height(float scale);
 
 /* Plain single-color text. y is the top of the glyphs. */
 void font_draw(float x, float y, float scale, Color c, int align, const char *s);
