@@ -13,11 +13,24 @@
 #include <loadfile.h>
 #include <stdio.h>
 
+#include <gsKit.h>
+
 #include "ps2_platform.h"
 #include "../core/audio.h"
 #include "../core/game.h"
 
 #define MAIN_THREAD_PRIORITY 0x40
+
+/* Counts vertical blanks so the loop knows how much real time passed. */
+static volatile unsigned s_vblanks;
+
+static int vblank_handler(int cause)
+{
+    (void)cause;
+    s_vblanks++;
+    ExitHandler();
+    return 0;
+}
 
 static void reset_iop(void)
 {
@@ -80,6 +93,8 @@ int main(int argc, char *argv[])
 
     const float frame_dt = gfx_ps2_is_pal() ? 1.0f / 50.0f : 1.0f / 60.0f;
     float acc = 0.0f;
+    gsKit_add_vsync_handler(vblank_handler);
+    unsigned last_vblank = s_vblanks;
     unsigned frame = 0;
     char status[128];
     for (;;) {
@@ -93,14 +108,21 @@ int main(int argc, char *argv[])
                    frame, status, po, ps, pr, audio_ps2_chunks(), al, aa, aq);
         }
         uint32_t held = pad_ps2_read();
-        acc += frame_dt;
+        /* advance by the real number of vblanks (frame skipping keeps the
+         * game and music in sync if a frame ever runs long) */
+        unsigned now = s_vblanks;
+        unsigned elapsed = now - last_vblank;
+        last_vblank = now;
+        if (elapsed < 1) elapsed = 1;
+        if (elapsed > 4) elapsed = 4;
+        acc += frame_dt * (float)elapsed;
         int n = 0;
-        while (acc >= TICK_DT * 0.999f && n < 3) {
+        while (acc >= TICK_DT * 0.999f && n < 5) {
             game_tick(held);
             acc -= TICK_DT;
             n++;
         }
-        if (n == 3) acc = 0.0f;
+        if (n == 5) acc = 0.0f;
         gfx_ps2_begin();
         game_render();
         gfx_ps2_end();
