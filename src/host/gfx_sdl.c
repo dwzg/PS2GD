@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "gfx_sdl.h"
-#include "../core/gfx.h"
+#include "../core/draw.h"
 
 #define MAX_VERTS 98304
 
@@ -52,6 +52,13 @@ static inline void put(float x, float y, Color c)
     SDL_Vertex *v = &s_v[s_n++];
     v->position.x = (x + s_ox) * s_sx;
     v->position.y = (y + s_oy) * s_sy;
+    if (draw_pixel_grid() > 0.0f) {
+        /* a sixteenth of a pixel, like the PSP's GE: shapes put on whole
+         * pixels stay whole (SDL's software renderer cuts a pixel off a
+         * rectangle 19.99998 pixels tall) */
+        v->position.x = roundf(v->position.x * 16.0f) / 16.0f;
+        v->position.y = roundf(v->position.y * 16.0f) / 16.0f;
+    }
     v->color.r = (Uint8)COL_R(c);
     v->color.g = (Uint8)COL_G(c);
     v->color.b = (Uint8)COL_B(c);

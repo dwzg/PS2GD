@@ -447,7 +447,9 @@ static void render_frame(const char *out)
 {
     SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
     SDL_RenderClear(s_ren);
-    gfx_sdl_begin(s_ren, (float)s_surf->w / SCREEN_W, (float)s_surf->h / SCREEN_H);
+    /* one scale both ways, as on the PSP (its 480 pixels show 479.6 of them) */
+    float k = (float)s_surf->h / SCREEN_H;
+    gfx_sdl_begin(s_ren, k, k);
     game_render(1.0f);
     gfx_sdl_flush();
     SDL_RenderPresent(s_ren);
@@ -1332,7 +1334,7 @@ static int cmd_xmb(const char *icon0, const char *pic1)
      * fade towards the screen edges */
     const float x0 = 250.0f;
     gfx_sdl_offset(-x0, 0.0f);
-    font_set_pixel_grid(0.5f, 0.5f);
+    draw_set_pixel_grid(0.5f);
     View v = {-5.2f, -9.2f, 0.4f, 0.6f, pal}; /* ground 66 px down the icon */
     render_background(&v);
     render_ground(&v, 0.0f, CORRIDOR_H, 0.0f);
@@ -1345,7 +1347,7 @@ static int cmd_xmb(const char *icon0, const char *pic1)
                     GAME_TITLE);
     gfx_sdl_flush();
     SDL_RenderPresent(s_ren);
-    font_set_pixel_grid(PIXEL_GRID_X, PIXEL_GRID_Y);
+    draw_set_pixel_grid(PIXEL_GRID);
     level_free(L);
     if (save_image(s_surf, icon0) != 0) {
         fprintf(stderr, "save failed: %s\n", SDL_GetError());

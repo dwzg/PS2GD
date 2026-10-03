@@ -556,12 +556,18 @@ static void draw_hud(const PlayState *ps)
         }
     }
     if (ps->best_popup_t > 0.0f) {
+        /* Pops in, a little past full size, then fades out. It stays up into
+         * the next attempt, so it sits above that attempt's counter. The
+         * outline grows with the text. On a pixel grid the text grows in
+         * whole pixels, and a little past full size would round to a whole
+         * pixel more and jump back down, so it stops at full size there. */
         float t = 2.0f - ps->best_popup_t;
         float s = 4.0f * (t < 0.25f ? ease_out_back(t / 0.25f) : 1.0f);
+        if (draw_pixel_grid() > 0.0f) s = minf(s, 4.0f);
         float a = clampf(ps->best_popup_t / 0.4f, 0.0f, 1.0f);
         snprintf(buf, sizeof(buf), "NEW BEST %d%%", ps->best_popup_val);
-        font_draw_fancy(SCREEN_W / 2, 170 - s * 3.5f, s, col_with_alpha(RGB(255, 255, 160), a),
-                        col_with_alpha(RGB(255, 170, 40), a), col_with_alpha(RGB(0, 0, 0), a), 3.0f,
+        font_draw_fancy(SCREEN_W / 2, 104 - font_height(s) * 0.5f, s, col_with_alpha(RGB(255, 255, 160), a),
+                        col_with_alpha(RGB(255, 170, 40), a), col_with_alpha(RGB(0, 0, 0), a), 3.0f * s / 4.0f,
                         ALIGN_CENTER, buf);
     }
 }
@@ -605,8 +611,9 @@ static void draw_results(const PlayState *ps)
     float t = ps->phase_t;
     if (t < 0.4f) return;
     float s = 5.0f * (t < 0.7f ? ease_out_back((t - 0.4f) / 0.3f) : 1.0f);
-    font_draw_fancy(SCREEN_W / 2, 70 - s * 3.5f + 20, s, RGB(255, 255, 170), RGB(255, 170, 30), RGB(0, 0, 0), 3.0f,
-                    ALIGN_CENTER, "LEVEL COMPLETE!");
+    if (draw_pixel_grid() > 0.0f) s = minf(s, 5.0f); /* as the NEW BEST popup (draw_hud) */
+    font_draw_fancy(SCREEN_W / 2, 70 - font_height(s) * 0.5f + 20, s, RGB(255, 255, 170), RGB(255, 170, 30),
+                    RGB(0, 0, 0), 3.0f * s / 5.0f, ALIGN_CENTER, "LEVEL COMPLETE!");
     if (t < 1.6f) return;
     float a = clampf((t - 1.6f) / 0.3f, 0.0f, 1.0f);
     render_panel(UI_X(140), 130, UI_X(500), 380, RGBA(10, 14, 30, (int)(220 * a)), RGBA(255, 255, 255, (int)(160 * a)));

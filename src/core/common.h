@@ -20,17 +20,19 @@
  * Target profile. The default is the PS2's (the PC build plays the same):
  * a 640x448 virtual screen. PD_PSP selects the PSP's: its 480x272 screen is
  * wider, so the virtual screen is too (levels show more of what is ahead,
- * menus laid out for 640 stay centred through UI_X), text is drawn on the
- * PSP's pixel grid so it stays sharp when scaled down (font.c), and help
- * texts name the PSP's buttons.
+ * menus laid out for 640 stay centred through UI_X), text, icons and thin
+ * lines are drawn on whole pixels of the PSP's screen so they stay sharp
+ * and even when scaled down (the pixel grid, draw.h), and help texts name
+ * the PSP's buttons.
  */
 #ifdef PD_PSP
-#define SCREEN_W 790 /* 448 * 480 / 272 */
+#define SCREEN_W 790 /* 448 * 480 / 272, rounded down */
 #define TARGET_NAME "PSP"
 #define BTN_NAME_L "L"
 #define BTN_NAME_R "R"
-#define PIXEL_GRID_X (480.0f / SCREEN_W) /* device pixels per virtual pixel */
-#define PIXEL_GRID_Y (272.0f / SCREEN_H)
+/* device pixels per virtual pixel, across and down: the 790 virtual pixels
+ * across come to 479.6 of the LCD's 480 */
+#define PIXEL_GRID (272.0f / SCREEN_H)
 #else
 #define SCREEN_W 640
 #define TARGET_NAME "PLAYSTATION 2"

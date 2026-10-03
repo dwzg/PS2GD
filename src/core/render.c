@@ -59,13 +59,14 @@ static void ground_band(const View *v, float gy, int dir, float alpha)
     float tile = 4.0f * B;
     float off = fmodf(v->cam_x * B, tile);
     Color sep = col_with_alpha(RGB(0, 0, 0), 0.22f * alpha);
+    float sw = grid_w(3.0f);
     for (float x = -off; x < SCREEN_W; x += tile) {
-        if (dir > 0) gfx_rect(x, gy, x + 3, edge, sep);
-        else gfx_rect(x, edge, x + 3, gy, sep);
+        if (dir > 0) gfx_rect(x, gy, x + sw, edge, sep);
+        else gfx_rect(x, edge, x + sw, gy, sep);
     }
 
     /* glowing surface line, fading towards the screen edges */
-    float lw = 3.0f;
+    float lw = grid_w(3.0f);
     float y0 = dir > 0 ? gy : gy - lw;
     Color lc = col_with_alpha(pal->ground_line, alpha);
     Color lt = col_with_alpha(pal->ground_line, 0.0f);
@@ -116,7 +117,7 @@ void render_spike(float sx, float sy_base, float w, float h, int down, Color fil
     /* dark body that lightens towards the tip, thick bright outline */
     Color top = col_lerp(col_scale(fill, 2.2f), edge, 0.16f);
     gfx_tri(sx, sy_base, fill, sx + w, sy_base, fill, sx + w * 0.5f, tipy, top);
-    float lw = 3.0f;
+    float lw = grid_w(3.0f);
     draw_line(sx + 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
     draw_line(sx + w - 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
     gfx_rect(sx + 1, down ? sy_base : sy_base - lw, sx + w - 1, down ? sy_base + lw : sy_base, edge);
@@ -330,7 +331,7 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
         }
     }
     /* block edges (they light up on the beat) */
-    const float ew = 3.0f;
+    const float ew = grid_w(3.0f);
     Color ec = col_lerp(pal->block_edge, COL_WHITE, 0.45f * v->pulse);
     for (int cy = r0; cy < r1; cy++) {
         for (int cx = c0; cx < c1; cx++) {
@@ -406,11 +407,19 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
 
 void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge)
 {
-    const float r = 10.0f;
-    x0 = floorf(x0 + 0.5f);
-    y0 = floorf(y0 + 0.5f);
-    x1 = floorf(x1 + 0.5f);
-    y1 = floorf(y1 + 0.5f);
+    const float r = 10.0f, bw = grid_w(3.0f);
+    /* on whole pixels, so the borders come out even */
+    if (draw_pixel_grid() > 0.0f) {
+        x0 = grid_snap(x0);
+        y0 = grid_snap(y0);
+        x1 = grid_snap(x1);
+        y1 = grid_snap(y1);
+    } else {
+        x0 = floorf(x0 + 0.5f);
+        y0 = floorf(y0 + 0.5f);
+        x1 = floorf(x1 + 0.5f);
+        y1 = floorf(y1 + 0.5f);
+    }
     gfx_rect(x0 + r, y0, x1 - r, y1, fill);
     gfx_rect(x0, y0 + r, x0 + r, y1 - r, fill);
     gfx_rect(x1 - r, y0 + r, x1, y1 - r, fill);
@@ -423,18 +432,23 @@ void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge
             gfx_tri(cxs[k], cys[k], fill, cxs[k] + cosf(t0) * r, cys[k] + sinf(t0) * r, fill,
                     cxs[k] + cosf(t1) * r, cys[k] + sinf(t1) * r, fill);
         }
-        draw_arc(cxs[k], cys[k], r - 3.0f, r, a0, a0 + PI * 0.5f, edge);
+        draw_arc(cxs[k], cys[k], r - bw, r, a0, a0 + PI * 0.5f, edge);
     }
-    gfx_rect(x0 + r, y0, x1 - r, y0 + 3, edge);
-    gfx_rect(x0 + r, y1 - 3, x1 - r, y1, edge);
-    gfx_rect(x0, y0 + r, x0 + 3, y1 - r, edge);
-    gfx_rect(x1 - 3, y0 + r, x1, y1 - r, edge);
+    gfx_rect(x0 + r, y0, x1 - r, y0 + bw, edge);
+    gfx_rect(x0 + r, y1 - bw, x1 - r, y1, edge);
+    gfx_rect(x0, y0 + r, x0 + bw, y1 - r, edge);
+    gfx_rect(x1 - bw, y0 + r, x1, y1 - r, edge);
 }
 
 void render_progress_bar(float x0, float y0, float x1, float y1, float frac, Color fill_a, Color fill_b)
 {
     frac = clampf(frac, 0.0f, 1.0f);
-    gfx_rect(x0 - 3, y0 - 3, x1 + 3, y1 + 3, RGBA(0, 0, 0, 200));
+    x0 = grid_snap(x0); /* on whole pixels, so the frame comes out even */
+    y0 = grid_snap(y0);
+    x1 = grid_snap(x1);
+    y1 = grid_snap(y1);
+    float b = grid_w(3.0f);
+    gfx_rect(x0 - b, y0 - b, x1 + b, y1 + b, RGBA(0, 0, 0, 200));
     gfx_rect(x0, y0, x1, y1, RGBA(255, 255, 255, 40));
     if (frac > 0.0f) {
         float xm = x0 + (x1 - x0) * frac;

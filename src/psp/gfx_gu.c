@@ -1,7 +1,9 @@
 /*
  * gfx.h backend for the PSP: the GE draws the virtual screen (SCREEN_W x
  * SCREEN_H, 790x448) onto the 480x272 LCD through an orthographic
- * projection, so the scaling costs the CPU nothing.
+ * projection, so the scaling costs the CPU nothing. It scales both ways by
+ * the pixel grid (PIXEL_GRID, 272/448), which text, icons and lines are
+ * placed on.
  *
  * Primitives are batched as coloured triangles into a vertex buffer and
  * drawn whenever the blend mode changes. The display list runs as it is
@@ -92,9 +94,10 @@ void gfx_psp_init(void)
     sceGuShadeModel(GU_SMOOTH);
     sceGuEnable(GU_BLEND);
 
-    /* virtual screen (0,0)-(SCREEN_W,SCREEN_H), y down -> clip space */
-    ScePspFMatrix4 proj = {{2.0f / SCREEN_W, 0.0f, 0.0f, 0.0f},
-                           {0.0f, -2.0f / SCREEN_H, 0.0f, 0.0f},
+    /* virtual screen, y down -> clip space, PIXEL_GRID device pixels per
+     * virtual one */
+    ScePspFMatrix4 proj = {{2.0f * PIXEL_GRID / PSP_SCR_W, 0.0f, 0.0f, 0.0f},
+                           {0.0f, -2.0f * PIXEL_GRID / PSP_SCR_H, 0.0f, 0.0f},
                            {0.0f, 0.0f, -1.0f, 0.0f},
                            {-1.0f, 1.0f, 0.0f, 1.0f}};
     ScePspFMatrix4 id = {{1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f},

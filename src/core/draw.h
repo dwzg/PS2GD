@@ -6,6 +6,24 @@
 
 void draw_init(void);
 
+/*
+ * Pixel grid: device pixels per virtual pixel of the screen the game is
+ * shown on, for drawing that keeps to whole device pixels (0: no grid, the
+ * screen is drawn 1:1 or at any size). Builds for a target that scales the
+ * virtual screen down start with its grid (PIXEL_GRID in common.h); pd_tool
+ * sets others for the pictures it draws. On a grid, text (font.c), icons
+ * (icons.c) and strokes (grid_w) are drawn on whole device pixels: a stroke
+ * 1.8 pixels wide would otherwise come out 1 or 2 pixels wide depending on
+ * where it lands.
+ */
+void draw_set_pixel_grid(float g);
+float draw_pixel_grid(void);
+/* A stroke width as a whole number of device pixels (at least one) on the
+ * grid: it covers that many pixels wherever it lands. Unchanged without. */
+float grid_w(float w);
+/* v moved onto the nearest device pixel edge on the grid; unchanged without. */
+float grid_snap(float v);
+
 void draw_line(float x0, float y0, float x1, float y1, float w, Color c);
 void draw_line2(float x0, float y0, float x1, float y1, float w, Color c0, Color c1);
 void draw_rect_outline(float x0, float y0, float x1, float y1, float w, Color c);

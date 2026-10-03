@@ -11,8 +11,10 @@ section from this file as release notes.
 
 - A PSP version: `EBOOT.PBP` for a PSP with custom firmware, a PS Vita with
   Adrenaline, or PPSSPP. It fills the PSP's 16:9 screen (levels show more of
-  what is ahead, menus are centred for it), draws text on whole pixels of
-  the 480x272 LCD so it stays sharp, plays the synthesized soundtrack at
+  what is ahead, menus are centred for it), draws text, icons and outlines
+  on whole pixels of the 480x272 LCD so they stay sharp and even (the
+  cube's borders come out the same width on every side, block edges keep
+  their width as the level scrolls), plays the synthesized soundtrack at
   48 kHz, and saves progress next to the game on the memory stick. HOME >
   Quit saves before exiting. The XMB icon and background are drawn by the
   game's own renderer.
@@ -22,6 +24,14 @@ section from this file as release notes.
   output width for menu screenshots.
 - `scripts/psp-emu-test.sh` runs the PSP build in PPSSPP's headless runner
   with scripted button presses and screenshots.
+
+### Fixed
+
+- The NEW BEST popup: its black outline grows with the text as it pops in
+  (it used to flash a black blot for the first frames), it fades out evenly
+  (it used to fade in stripes where the outline's pieces overlapped), and
+  it sits higher, above the next attempt's counter, instead of running
+  into it. The LEVEL COMPLETE title pops in the same way.
 
 ## [1.0.0] - 2026-10-03
 

@@ -3,22 +3,48 @@
 #include "level.h"
 #include "theme.h"
 
-/* Local -> screen transform for icon parts (local units: 1 = one block). */
+/*
+ * Local -> screen transform for icon parts (local units: 1 = one block).
+ *
+ * On a pixel grid (draw.h) an icon sits on a device pixel, and when it is
+ * square to the screen (or within a few degrees of it, landing) its parts'
+ * edges are rounded to whole pixels the same way on both sides of the
+ * centre: the borders of nested squares come out even, instead of 1 pixel
+ * on one side and 2 on the other.
+ */
 typedef struct {
     float cx, cy, s, co, si, fy;
+    float grid; /* > 0: round offsets to this many device pixels per virtual one */
 } Xf;
 
 static Xf xf_make(float cx, float cy, float s, float angle, int flip)
 {
-    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f};
+    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f};
+    float g = draw_pixel_grid();
+    if (g > 0.0f) {
+        t.cx = grid_snap(cx);
+        t.cy = grid_snap(cy);
+        float q = floorf(angle / (PI * 0.5f) + 0.5f); /* nearest quarter turn */
+        if (fabsf(angle - q * (PI * 0.5f)) < 0.06f) {
+            int k = ((int)q % 4 + 4) % 4;
+            t.co = k == 0 ? 1.0f : (k == 2 ? -1.0f : 0.0f);
+            t.si = k == 1 ? 1.0f : (k == 3 ? -1.0f : 0.0f);
+            t.grid = g;
+        }
+    }
     return t;
 }
 
 static void xf_pt(const Xf *t, float lx, float ly, float *ox, float *oy)
 {
     ly *= t->fy;
-    *ox = t->cx + (lx * t->co - ly * t->si) * t->s;
-    *oy = t->cy + (lx * t->si + ly * t->co) * t->s;
+    float dx = (lx * t->co - ly * t->si) * t->s, dy = (lx * t->si + ly * t->co) * t->s;
+    if (t->grid > 0.0f) {
+        dx = roundf(dx * t->grid) / t->grid;
+        dy = roundf(dy * t->grid) / t->grid;
+    }
+    *ox = t->cx + dx;
+    *oy = t->cy + dy;
 }
 
 static void lrect(const Xf *t, float x0, float y0, float x1, float y1, Color c)
@@ -150,6 +176,8 @@ void icon_draw_ship(float cx, float cy, float size, float angle, int flip, int i
 void icon_draw_ball(float cx, float cy, float size, float angle, int icon, Color c1, Color c2)
 {
     const Color k = RGB(8, 8, 12);
+    cx = grid_snap(cx); /* the circles below sit on a device pixel too */
+    cy = grid_snap(cy);
     Xf t = xf_make(cx, cy, size, angle, 0);
     draw_circle(cx, cy, size * 0.49f, k);
     draw_circle(cx, cy, size * 0.42f, c1);

@@ -45,9 +45,9 @@ an unofficial fan project, not affiliated with or endorsed by RobTop Games;
   every frame is drawn interpolated to the moment it is shown, so the
   scrolling is even at either refresh rate.
 - **On the PSP** the game fills the 16:9 screen: levels show more of what is
-  ahead, the menus are laid out for it, and text is drawn on whole pixels of
-  the 480x272 LCD so it stays sharp. It has its own XMB icon and background,
-  drawn by the game's renderer.
+  ahead, the menus are laid out for it, and text, icons and outlines are
+  drawn on whole pixels of the 480x272 LCD so they stay sharp and even. It
+  has its own XMB icon and background, drawn by the game's renderer.
 
 ## Controls
 
