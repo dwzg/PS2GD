@@ -1,0 +1,45 @@
+# PC build (SDL2) and developer tool.
+#   make -f Makefile.host            -> build/host/pulsedash, build/host/pd_tool
+#   make -f Makefile.host test       -> data checks, smoke test, every level solved, coins
+#   make -f Makefile.host test-full  -> also prove levels beatable at 30 and 20 Hz input
+
+CC ?= cc
+SDL_CFLAGS := $(shell sdl2-config --cflags)
+SDL_LIBS := $(shell sdl2-config --libs)
+CFLAGS ?= -O2 -g
+CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion $(SDL_CFLAGS)
+LDLIBS := $(SDL_LIBS) -lm
+
+OUT := build/host
+CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c)
+CORE_OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC))
+GAME_OBJ := $(OUT)/host/main_sdl.o $(OUT)/host/gfx_sdl.o
+TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/gfx_sdl.o
+
+all: $(OUT)/pulsedash $(OUT)/pd_tool
+
+$(OUT)/pulsedash: $(CORE_OBJ) $(GAME_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(OUT)/pd_tool: $(CORE_OBJ) $(TOOL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(OUT)/host/%.o: CFLAGS += -Wno-double-promotion
+
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+test: $(OUT)/pd_tool
+	$(OUT)/pd_tool check
+	$(OUT)/pd_tool smoke
+	$(OUT)/pd_tool solve all 1
+	$(OUT)/pd_tool coins all
+
+test-full: test
+	$(OUT)/pd_tool solve all 3
+
+clean:
+	rm -rf $(OUT)
+
+.PHONY: all test test-full clean
