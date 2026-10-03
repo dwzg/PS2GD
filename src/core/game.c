@@ -235,7 +235,7 @@ static void title_tick(void)
 static void draw_button(float cx, float cy, float size, int selected, Color c, int kind)
 {
     Game *g = &g_game;
-    float s = size * (selected ? 1.0f + 0.06f * sinf(g->t * 6.0f) + 0.12f : 1.0f);
+    float s = size * (selected ? 1.08f + 0.04f * sinf(g->t * 6.0f) : 1.0f);
     if (selected) draw_glow(cx, cy, s * 1.3f, col_with_alpha(c, 0.5f));
     render_panel(cx - s * 0.5f - 4, cy - s * 0.5f - 4, cx + s * 0.5f + 4, cy + s * 0.5f + 4, RGBA(0, 0, 0, 200),
                  RGBA(0, 0, 0, 220));
@@ -266,22 +266,25 @@ static void title_render(void)
     float pulse = beat_pulse();
     demo_render(&g->demo, &pal);
 
+    /* Vertical layout, with room for the title's bob (-4..+7 px) and the
+     * selected button's pulse (up to 1.12x): title 26-105, subtitle to 125,
+     * buttons 135-255, labels 264-282; the demo run plays below. */
     float bob = sinf(g->t * 2.0f) * 4.0f + pulse * 3.0f;
-    font_draw_fancy(SCREEN_W / 2 + 4, 46 + bob + 5, 9.0f, RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 0), 0.0f,
+    font_draw_fancy(SCREEN_W / 2 + 4, 30 + bob + 5, 9.0f, RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 0), 0.0f,
                     ALIGN_CENTER, GAME_TITLE);
-    font_draw_fancy(SCREEN_W / 2, 46 + bob, 9.0f, RGB(255, 250, 200), RGB(255, 170, 40), RGB(20, 10, 0), 4.0f,
+    font_draw_fancy(SCREEN_W / 2, 30 + bob, 9.0f, RGB(255, 250, 200), RGB(255, 170, 40), RGB(20, 10, 0), 4.0f,
                     ALIGN_CENTER, GAME_TITLE);
-    font_draw(SCREEN_W / 2, 120 + bob, 2.0f, col_with_alpha(COL_WHITE, 0.85f), ALIGN_CENTER,
+    font_draw(SCREEN_W / 2, 104 + bob, 2.0f, col_with_alpha(COL_WHITE, 0.85f), ALIGN_CENTER,
               "A RHYTHM PLATFORMER FOR PLAYSTATION 2");
 
     static const Color cols[3] = {RGB(60, 190, 255), RGB(70, 220, 90), RGB(255, 150, 50)};
     static const char *labels[3] = {"GARAGE", "PLAY", "OPTIONS"};
     for (int i = 0; i < 3; i++) {
         float cx = SCREEN_W / 2 + (i - 1) * 170.0f;
-        float size = i == 1 ? 104.0f : 74.0f;
-        draw_button(cx, 200, size, g->menu_sel == i, cols[i], i);
+        float size = i == 1 ? 100.0f : 74.0f;
+        draw_button(cx, 195, size, g->menu_sel == i, cols[i], i);
         int sel = g->menu_sel == i;
-        font_draw_fancy(cx, 264, 2.0f, sel ? COL_WHITE : RGB(210, 220, 235), sel ? RGB(255, 240, 160) : RGB(170, 180, 200),
+        font_draw_fancy(cx, 266, 2.0f, sel ? COL_WHITE : RGB(210, 220, 235), sel ? RGB(255, 240, 160) : RGB(170, 180, 200),
                         RGB(0, 0, 0), 2.0f, ALIGN_CENTER, labels[i]);
     }
     font_draw(SCREEN_W / 2, SCREEN_H - 20, 2.0f, col_with_alpha(COL_WHITE, 0.7f + 0.3f * sinf(g->t * 4.0f)),

@@ -215,8 +215,15 @@ static void add_checkpoint(PlayState *ps)
 static void update_camera(PlayState *ps, float dt)
 {
     const Player *p = &ps->p;
-    if (ps->phase != PH_COMPLETE) ps->cam_x = p->x - CAM_PLAYER_X;
-    else ps->cam_x = minf(p->x - CAM_PLAYER_X, ps->L->end_x - CAM_PLAYER_X);
+    if (ps->phase != PH_COMPLETE) {
+        ps->cam_x = p->x - CAM_PLAYER_X;
+    } else {
+        /* past the finish the camera glides to a stop from the speed it had
+         * (stopping dead in one tick looks like a hitch) */
+        const float k = 5.0f;
+        float stop = ps->L->end_x - CAM_PLAYER_X + p->speed / k;
+        ps->cam_x += (stop - ps->cam_x) * (1.0f - expf(-dt * k));
+    }
 
     float k;
     if (p->mode == MODE_CUBE) {
@@ -562,7 +569,7 @@ static void draw_pause(const PlayState *ps)
 {
     const Game *g = &g_game;
     gfx_rect(0, 0, SCREEN_W, SCREEN_H, RGBA(0, 0, 0, 150));
-    render_panel(120, 60, 520, 390, RGBA(10, 14, 30, 230), RGBA(255, 255, 255, 160));
+    render_panel(120, 60, 520, 400, RGBA(10, 14, 30, 230), RGBA(255, 255, 255, 160));
     font_draw_fancy(SCREEN_W / 2, 80, 4.0f, COL_WHITE, RGB(190, 210, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, ps->info.name);
 
     int idx = ps->level_idx < SAVE_MAX_LEVELS ? ps->level_idx : 0;
@@ -578,7 +585,7 @@ static void draw_pause(const PlayState *ps)
 
     const char *items[4] = {"RESUME", "RESTART", ps->practice ? "NORMAL MODE" : "PRACTICE MODE", "EXIT LEVEL"};
     for (int i = 0; i < 4; i++) {
-        float y = 200 + i * 44;
+        float y = 196 + i * 42;
         int sel = i == ps->pause_sel;
         if (sel) {
             render_panel(170, y - 8, 470, y + 30, RGBA(255, 255, 255, 40), RGB(120, 255, 150));
@@ -587,7 +594,8 @@ static void draw_pause(const PlayState *ps)
                         sel ? RGB(150, 255, 170) : RGB(110, 120, 140), RGB(0, 0, 0), 2.0f, ALIGN_CENTER, items[i]);
     }
     snprintf(buf, sizeof(buf), "ATTEMPT %d", ps->attempt);
-    font_draw(SCREEN_W / 2, 372, 2.0f, RGB(160, 170, 190), ALIGN_CENTER, buf);
+    /* about as far above the bottom border as the level name is below the top */
+    font_draw(SCREEN_W / 2, 368, 2.0f, RGB(160, 170, 190), ALIGN_CENTER, buf);
 }
 
 static void draw_results(const PlayState *ps)
