@@ -56,6 +56,10 @@ First release.
 
 ### Fixed
 
+- A short freeze when crossing the finish line on PS2: the game saved to
+  the memory card right then, and waited for it. Saves are now written in
+  the background, and the camera glides to a stop past the finish instead
+  of stopping dead.
 - Stuttering scrolling on PS2: frames are now flipped right at the vertical
   blank (the audio thread could delay them before), and drawn interpolated
   between game ticks, which also makes PAL (50 Hz) consoles scroll evenly.

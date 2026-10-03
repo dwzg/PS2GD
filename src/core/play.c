@@ -215,8 +215,15 @@ static void add_checkpoint(PlayState *ps)
 static void update_camera(PlayState *ps, float dt)
 {
     const Player *p = &ps->p;
-    if (ps->phase != PH_COMPLETE) ps->cam_x = p->x - CAM_PLAYER_X;
-    else ps->cam_x = minf(p->x - CAM_PLAYER_X, ps->L->end_x - CAM_PLAYER_X);
+    if (ps->phase != PH_COMPLETE) {
+        ps->cam_x = p->x - CAM_PLAYER_X;
+    } else {
+        /* past the finish the camera glides to a stop from the speed it had
+         * (stopping dead in one tick looks like a hitch) */
+        const float k = 5.0f;
+        float stop = ps->L->end_x - CAM_PLAYER_X + p->speed / k;
+        ps->cam_x += (stop - ps->cam_x) * (1.0f - expf(-dt * k));
+    }
 
     float k;
     if (p->mode == MODE_CUBE) {

@@ -6,7 +6,8 @@
 
 /* Read the save blob. Returns bytes read, or < 0 if there is no save. */
 int plat_save_read(void *buf, int size);
-/* Write the save blob. Returns 0 on success. */
+/* Write the save blob, possibly in the background (the PS2 writes the memory
+ * card from a thread of its own). Returns 0 if it was accepted. */
 int plat_save_write(const void *buf, int size);
 
 /* Short label of the platform shown in the options screen. */

@@ -2,6 +2,12 @@
  * Memory card saves via libmc: mc0:/PULSEDASH/ (falls back to mc1).
  * The folder gets an icon.sys + 3D icon so it shows up properly in the
  * PS2 browser.
+ *
+ * Writing takes a few hundred milliseconds on a real card, so saves are
+ * written by a thread below the game loop and the audio thread, in their
+ * idle time: the game hands over a copy and carries on (the level-complete
+ * save used to freeze the finish). Only that thread uses libmc after the
+ * save is read at boot.
  */
 #include <kernel.h>
 #include <stdio.h>
@@ -21,15 +27,64 @@
 #define ICON_SYS "/PULSEDASH/icon.sys"
 #define ICON_FILE "/PULSEDASH/pulse.ico"
 
+#define SAVE_THREAD_PRIORITY 0x60 /* below the audio thread (audio_ps2.c) */
+#define SAVE_STACK 0x4000
+
 static int s_mc_ok;
 static uint8_t s_io[4096] __attribute__((aligned(64)));
 static uint8_t s_icon[48 * 1024] __attribute__((aligned(64)));
+
+/* the newest save waiting to be written */
+static uint8_t s_pending[sizeof(s_io)];
+static int s_pending_size, s_have_pending;
+static int s_lock = -1, s_wake = -1;
+static u8 s_stack[SAVE_STACK] __attribute__((aligned(16)));
+
+static void write_save(const void *buf, int size);
+
+static void save_thread(void *arg)
+{
+    (void)arg;
+    static uint8_t buf[sizeof(s_io)];
+    for (;;) {
+        WaitSema(s_wake);
+        WaitSema(s_lock);
+        int size = s_pending_size;
+        memcpy(buf, s_pending, (size_t)size);
+        s_have_pending = 0;
+        SignalSema(s_lock);
+        write_save(buf, size);
+    }
+}
+
+static int make_sema(int count, int max)
+{
+    ee_sema_t sema;
+    memset(&sema, 0, sizeof(sema));
+    sema.init_count = count;
+    sema.max_count = max;
+    return CreateSema(&sema);
+}
 
 int save_ps2_init(int embedded)
 {
     if (embedded && irx_load_memcard() < 0) return -1;
     if (mcInit(embedded ? MC_TYPE_XMC : MC_TYPE_MC) < 0) {
         printf("pulsedash: mcInit failed\n");
+        return -1;
+    }
+    s_lock = make_sema(1, 1);
+    s_wake = make_sema(0, 1);
+    ee_thread_t th;
+    memset(&th, 0, sizeof(th));
+    th.func = (void *)save_thread;
+    th.stack = s_stack;
+    th.stack_size = SAVE_STACK;
+    th.gp_reg = &_gp;
+    th.initial_priority = SAVE_THREAD_PRIORITY;
+    int tid = s_lock >= 0 && s_wake >= 0 ? CreateThread(&th) : -1;
+    if (tid < 0 || StartThread(tid, NULL) < 0) {
+        printf("pulsedash: save thread failed\n");
         return -1;
     }
     s_mc_ok = 1;
@@ -132,18 +187,32 @@ static void write_icon_files(int port)
     if (n > 0) write_file(port, ICON_FILE, s_icon, n);
 }
 
-int plat_save_write(const void *buf, int size)
+/* On the save thread. */
+static void write_save(const void *buf, int size)
 {
-    if (!s_mc_ok || size > (int)sizeof(s_io)) return -1;
     for (int port = 0; port < 2; port++) {
         if (!card_ready(port)) continue;
         mcMkDir(port, 0, SAVE_DIR);
         int r = mc_wait();
         if (r == 0) write_icon_files(port); /* folder was just created */
         memcpy(s_io, buf, (size_t)size);
-        if (write_file(port, SAVE_FILE, s_io, size) == 0) return 0;
+        if (write_file(port, SAVE_FILE, s_io, size) == 0) return;
     }
-    return -1;
+    printf("pulsedash: saving failed\n");
+}
+
+/* Queue the save for the save thread; a newer one replaces one still waiting. */
+int plat_save_write(const void *buf, int size)
+{
+    if (!s_mc_ok || size > (int)sizeof(s_pending)) return -1;
+    WaitSema(s_lock);
+    memcpy(s_pending, buf, (size_t)size);
+    s_pending_size = size;
+    int wake = !s_have_pending;
+    s_have_pending = 1;
+    SignalSema(s_lock);
+    if (wake) SignalSema(s_wake);
+    return 0;
 }
 
 const char *plat_name(void) { return "PS2"; }
