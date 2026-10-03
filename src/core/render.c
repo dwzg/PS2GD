@@ -25,11 +25,12 @@ static void bg_layer(const View *v, float parallax, float tile_w, float min_s, f
         float sy = SCREEN_H - (oy - py) * B;
         float s = size * B;
         float a = alpha * (0.6f + 0.4f * hash_f01(h >> 11));
+        /* faint and thin-lined, so they never pass for blocks */
         gfx_rect(sx, sy - s, sx + s, sy, col_with_alpha(base, a * 0.55f));
-        draw_rect_outline(sx, sy - s, sx + s, sy, 3.0f, col_with_alpha(base, a * (1.0f + v->pulse * 0.6f)));
+        draw_rect_outline(sx, sy - s, sx + s, sy, 2.0f, col_with_alpha(base, a * (1.0f + v->pulse * 0.4f)));
         if (h & 1) {
             float inset = s * 0.25f;
-            draw_rect_outline(sx + inset, sy - s + inset, sx + s - inset, sy - inset, 2.0f,
+            draw_rect_outline(sx + inset, sy - s + inset, sx + s - inset, sy - inset, 1.5f,
                               col_with_alpha(base, a * 0.8f));
         }
     }
@@ -38,8 +39,8 @@ static void bg_layer(const View *v, float parallax, float tile_w, float min_s, f
 void render_background(const View *v)
 {
     gfx_rect_v(0, 0, SCREEN_W, SCREEN_H, v->pal->bg_top, v->pal->bg_bot);
-    bg_layer(v, 0.12f, 9.0f, 3.0f, 6.0f, 0.10f, 0x51u);
-    bg_layer(v, 0.30f, 6.0f, 1.5f, 3.0f, 0.13f, 0xA7u);
+    bg_layer(v, 0.12f, 9.0f, 3.0f, 6.0f, 0.07f, 0x51u);
+    bg_layer(v, 0.30f, 6.0f, 1.5f, 3.0f, 0.09f, 0xA7u);
 }
 
 /* One horizontal band of "ground": surface at screen y gy, extending away
@@ -94,12 +95,28 @@ void render_ground(const View *v, float corr_floor, float corr_ceil, float corr_
 /* Objects                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Soft glow around a spike in its outline colour (additive blending): it
+ * lifts dark spikes off dark backgrounds, like the glow around blocks. */
+static void spike_glow(float sx, float sy_base, float w, float h, int down, Color edge)
+{
+    float d = down ? 1.0f : -1.0f;
+    float cx = sx + w * 0.5f, cy = sy_base + d * h * 0.33f; /* centroid */
+    float g = 0.30f * w;                                     /* how far the glow reaches */
+    float px[3] = {sx - g, sx + w + g, cx}, py[3] = {sy_base, sy_base, sy_base + d * (h + g)};
+    Color c = col_with_alpha(edge, 0.30f), z = col_with_alpha(edge, 0.0f);
+    for (int i = 0; i < 3; i++) {
+        int j = (i + 1) % 3;
+        gfx_tri(cx, cy, c, px[i], py[i], z, px[j], py[j], z);
+    }
+}
+
 void render_spike(float sx, float sy_base, float w, float h, int down, Color fill, Color edge)
 {
     float tipy = down ? sy_base + h : sy_base - h;
-    Color top = col_scale(fill, 2.2f);
+    /* dark body that lightens towards the tip, thick bright outline */
+    Color top = col_lerp(col_scale(fill, 2.2f), edge, 0.16f);
     gfx_tri(sx, sy_base, fill, sx + w, sy_base, fill, sx + w * 0.5f, tipy, top);
-    float lw = 2.2f;
+    float lw = 3.0f;
     draw_line(sx + 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
     draw_line(sx + w - 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
     gfx_rect(sx + 1, down ? sy_base : sy_base - lw, sx + w - 1, down ? sy_base + lw : sy_base, edge);
@@ -256,6 +273,43 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
         }
     }
 
+    /* glow around blocks and hazards, behind everything else */
+    const float gw = 8.0f;
+    Color gc = col_with_alpha(pal->block_edge, 0.20f + 0.10f * v->pulse), gz = col_with_alpha(pal->block_edge, 0.0f);
+    gfx_blend(BLEND_ADD);
+    for (int cy = r0; cy < r1; cy++) {
+        for (int cx = c0; cx < c1; cx++) {
+            int t = L->grid[cy * L->width + cx];
+            if (!t) continue;
+            uint8_t e = L->edges[cy * L->width + cx];
+            float x0 = view_sx(v, (float)cx), x1 = x0 + B;
+            float y1 = view_sy(v, (float)cy), y0 = y1 - B;
+            if (t == OBJ_SLAB_LO) y0 = y1 - B * 0.5f;
+            else if (t == OBJ_SLAB_HI) y1 = y0 + B * 0.5f;
+            if (e & EDGE_T) gfx_rect_v(x0, y0 - gw, x1, y0, gz, gc);
+            if (e & EDGE_B) gfx_rect_v(x0, y1, x1, y1 + gw, gc, gz);
+            if (e & EDGE_L) gfx_rect_h(x0 - gw, y0, x0, y1, gz, gc);
+            if (e & EDGE_R) gfx_rect_h(x1, y0, x1 + gw, y1, gc, gz);
+        }
+    }
+    {
+        int g0 = clampi(c0 - 1, 0, L->width), g1 = clampi(c1 + 1, 0, L->width);
+        for (int i = L->col_start[g0]; i < L->col_start[g1]; i++) {
+            const LevelObj *o = &L->objs[i];
+            float sx = view_sx(v, (float)o->cx), sb = view_sy(v, (float)o->cy);
+            switch (o->type) {
+            case OBJ_SPIKE_UP: spike_glow(sx, sb, B, B * 0.92f, 0, pal->block_edge); break;
+            case OBJ_SPIKE_DOWN: spike_glow(sx, sb - B, B, B * 0.92f, 1, pal->block_edge); break;
+            case OBJ_SPIKE_SM_UP: spike_glow(sx + B * 0.1f, sb, B * 0.8f, B * 0.42f, 0, pal->block_edge); break;
+            case OBJ_SPIKE_SM_DOWN: spike_glow(sx + B * 0.1f, sb - B, B * 0.8f, B * 0.42f, 1, pal->block_edge); break;
+            case OBJ_SAW_BIG: draw_circle_grad(sx + B * 0.5f, sb - B * 0.5f, B * 1.5f, gc, gz); break;
+            case OBJ_SAW_SMALL: draw_circle_grad(sx + B * 0.5f, sb - B * 0.5f, B * 0.85f, gc, gz); break;
+            default: break;
+            }
+        }
+    }
+    gfx_blend(BLEND_ALPHA);
+
     /* block fills */
     for (int cy = r0; cy < r1; cy++) {
         for (int cx = c0; cx < c1; cx++) {
@@ -276,7 +330,7 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
         }
     }
     /* block edges (they light up on the beat) */
-    const float ew = 2.5f;
+    const float ew = 3.0f;
     Color ec = col_lerp(pal->block_edge, COL_WHITE, 0.45f * v->pulse);
     for (int cy = r0; cy < r1; cy++) {
         for (int cx = c0; cx < c1; cx++) {
@@ -296,7 +350,7 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
 
     /* objects */
     int oc0 = clampi(c0 - 1, 0, L->width), oc1 = clampi(c1 + 1, 0, L->width);
-    const Color spike_fill = RGBA(6, 6, 10, 235);
+    const Color spike_fill = SPIKE_FILL;
     for (int pass = 0; pass < 2; pass++) {
         for (int i = L->col_start[oc0]; i < L->col_start[oc1]; i++) {
             const LevelObj *o = &L->objs[i];

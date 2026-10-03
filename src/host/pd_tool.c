@@ -14,15 +14,22 @@
  *                                       level with scripted input
  *   pd_tool rhythm <lvl|all> [tol] [x]  can the level be beaten pressing (in cube,
  *                                       ball and UFO) only on 8th notes of its
- *                                       song, tol ticks early or late (default 2)?
+ *                                       song, tol ticks early or late (default 2),
+ *                                       tapping orbs rather than holding into them?
  *                                       (with x: only check up to that x)
 *   pd_tool trace <lvl> x0 x1 [off]     player state along the solver's path (with
  *                                       off: the rhythm check's run at that offset)
+ *   pd_tool orbs <lvl> [min]            how forgiving each orb is: the ticks at which
+ *                                       a quick tap (4 ticks) on it still works, in
+ *                                       the rhythm check's run (fails below min)
  *   pd_tool ruler <lvl>                 print the level source with the beat grid
  *                                       (where the player is on each 8th note)
  *   pd_tool script <lvl> [off]          print the rhythm check's presses as an
  *                                       emulator harness script ("+frame:CROSS:n",
  *                                       frames at 59.94 Hz from the attempt start)
+ *   pd_tool palettes <out.bmp> [min]    every palette drawing the same small scene,
+ *                                       and the luminance contrast of obstacles
+ *                                       against the background (fails below min)
  *   pd_tool prof <lvl>                  play a level along the solver's path,
  *                                       rendering every tick into a null backend;
  *                                       prints primitives per frame (run it under
@@ -136,8 +143,14 @@ static float s_until_x; /* > 0: count reaching this x as solved (quick checks) *
 
 typedef struct {
     Player p;
-    uint8_t prev; /* button held on the previous tick */
+    uint8_t prev;     /* button held on the previous tick */
+    uint16_t press_t; /* tick the current press started */
 } Node;
+
+/* In rhythm mode an orb only counts if the press began at most this many
+ * ticks before it fired: a player taps on the orb rather than holding the
+ * button through it. */
+#define ORB_TAP_TICKS 6
 
 static Node *s_cur, *s_next;
 static uint16_t *s_par[MAX_TICKS]; /* parent index in the previous frontier */
@@ -152,15 +165,17 @@ static uint64_t mix64(uint64_t h, uint64_t v)
     return h * 0xff51afd7ed558ccdULL;
 }
 
-/* States closer than this quantization are treated as identical. */
-static uint64_t state_key(const Player *p, int prev_held)
+/* States closer than this quantization are treated as identical. `input`
+ * holds the button (bit 0) and, in rhythm mode, whether the press is still
+ * fresh enough to take an orb (bit 1). */
+static uint64_t state_key(const Player *p, int input)
 {
     uint64_t h = 1469598103934665603ULL;
     h = mix64(h, (uint64_t)(int64_t)lroundf(p->y * 16.0f));
     h = mix64(h, (uint64_t)(int64_t)lroundf(p->vy * 2.0f));
     h = mix64(h, (uint64_t)(int64_t)lroundf(p->x * 16.0f));
     h = mix64(h, (uint64_t)(p->mode | ((p->grav + 1) << 4) | (p->grounded << 6) | (p->buf << 7) |
-                            (p->speed_idx << 8) | (prev_held << 11) | ((uint64_t)p->coins << 12)));
+                            (p->speed_idx << 8) | (input << 11) | ((uint64_t)p->coins << 13)));
     for (int i = 0; i < (s_L->ninteract + 31) / 32; i++) h = mix64(h, p->used[i]);
     return h | 1u;
 }
@@ -248,6 +263,7 @@ static int solve(const Level *L, int K, int phase, float *reached)
     int ncur = 1;
     sim_reset(&s_cur[0].p, L);
     s_cur[0].prev = 0;
+    s_cur[0].press_t = 0;
     int result = -1;
     for (int t = 0; t < MAX_TICKS - 1 && ncur > 0; t++) {
         int nnext = 0;
@@ -259,17 +275,20 @@ static int solve(const Level *L, int K, int phase, float *reached)
             for (int held = 0; held < 2; held++) {
                 if (!input_allowed(t, &s_cur[i].p, s_cur[i].prev, held)) continue;
                 Node n = s_cur[i];
+                if (held && !n.prev) n.press_t = (uint16_t)t;
                 sim_tick(&n.p, L, held, held && !n.prev);
                 n.prev = (uint8_t)held;
                 s_nodes++;
                 if (n.p.dead || !coins_ok(&n.p)) continue;
+                int fresh = s_rhythm && held && t - n.press_t <= ORB_TAP_TICKS;
+                if (s_rhythm && (n.p.events & EV_ORB) && t - n.press_t > ORB_TAP_TICKS) continue;
                 if (n.p.done || (s_until_x > 0.0f && n.p.x >= s_until_x)) {
                     s_tmp_par[0] = (uint16_t)i;
                     s_tmp_inp[0] = (uint8_t)held;
                     result = t + 1;
                     break;
                 }
-                if (nnext >= BEAM || !hash_insert(state_key(&n.p, held))) continue;
+                if (nnext >= BEAM || !hash_insert(state_key(&n.p, held | fresh << 1))) continue;
                 s_tmp_par[nnext] = (uint16_t)i;
                 s_tmp_inp[nnext] = (uint8_t)held;
                 s_next[nnext++] = n;
@@ -767,6 +786,83 @@ static int rhythm_level(int idx, int tol)
     return ok;
 }
 
+/* Replay inputs (one byte per tick) from tick 0 until x passes x_end; 1 if alive. */
+static int replay_ok(const Level *L, const uint8_t *in, int n, float x_end)
+{
+    Player p;
+    sim_reset(&p, L);
+    int prev = 0;
+    while (!p.dead && !p.done && p.x < x_end && p.ticks < MAX_TICKS) {
+        int h = p.ticks < n ? in[p.ticks] : 0;
+        sim_tick(&p, L, h, h && !prev);
+        prev = h;
+    }
+    return !p.dead;
+}
+
+/*
+ * Orb timing: take the rhythm check's run, and for every orb it uses replace
+ * the press that hit the orb with a 4-tick tap at each tick nearby (a human
+ * taps rather than holding the button through the orb). The tap window is
+ * the number of start ticks that still get the player 25 blocks further.
+ */
+static int cmd_orbs(int idx, int min_window)
+{
+    Level *L = level_parse(level_src(idx));
+    rhythm_grid(L, 0);
+    s_rhythm = 1;
+    int t_end = solve(L, 3, 0, NULL);
+    s_rhythm = 0;
+    if (t_end < 0) {
+        printf("level %d: no on-beat run\n", idx);
+        level_free(L);
+        return 1;
+    }
+    static uint8_t base[MAX_TICKS], trial[MAX_TICKS];
+    memcpy(base, s_sol, sizeof(base));
+    float step = 1800.0f / audio_song_bpm(SONG_FIRST_LEVEL + L->song);
+    Player p;
+    sim_reset(&p, L);
+    int prev = 0, bad = 0, norbs = 0;
+    while (!p.dead && !p.done && p.ticks < t_end) {
+        int t = p.ticks, h = base[t];
+        sim_tick(&p, L, h, h && !prev);
+        prev = h;
+        if (!(p.events & EV_ORB) || p.mode != MODE_CUBE) continue;
+        /* the press that hit the orb started at ts */
+        int ts = t;
+        while (ts > 0 && base[ts - 1]) ts--;
+        const LevelObj *o = &L->objs[p.ev_obj];
+        float x_end = o->cx + 25.0f;
+        int lo = -1, hi = -1, count = 0;
+        for (int t2 = ts - 20; t2 <= ts + 20; t2++) {
+            if (t2 < 0) continue;
+            memcpy(trial, base, sizeof(trial));
+            for (int k = ts; k < MAX_TICKS && base[k]; k++) trial[k] = 0; /* drop the original press */
+            int ok_gap = 1;
+            for (int k = t2; k < t2 + 4 && k < MAX_TICKS; k++) {
+                if (k > 0 && trial[k - 1] && k == t2) ok_gap = 0; /* would merge with an earlier press */
+                trial[k] = 1;
+            }
+            if (ok_gap && replay_ok(L, trial, t_end, x_end)) {
+                if (lo < 0) lo = t2;
+                hi = t2;
+                count++;
+            }
+        }
+        int k8 = (int)lroundf((float)ts / step);
+        float g8 = (float)k8 * step;
+        norbs++;
+        printf("level %d: orb at x=%d row %d: tap window %2d ticks (%+.1f..%+.1f around its 8th note)%s\n", idx,
+               o->cx, o->cy, count, (double)(lo - g8), (double)(hi - g8),
+               count < min_window ? "  TOO TIGHT" : "");
+        bad += count < min_window;
+    }
+    if (!norbs) printf("level %d: no orbs hit in cube mode\n", idx);
+    level_free(L);
+    return bad;
+}
+
 /* Print the level's source sections with a beat ruler above each one. */
 static int cmd_ruler(int idx)
 {
@@ -844,6 +940,93 @@ static int cmd_script(int idx, int offset)
     }
     printf("\n");
     return 0;
+}
+
+/* WCAG relative luminance and contrast ratio (1..21). */
+static float lin_channel(int c)
+{
+    float f = (float)c / 255.0f;
+    return f <= 0.04045f ? f / 12.92f : powf((f + 0.055f) / 1.055f, 2.4f);
+}
+
+static float luminance(Color c)
+{
+    return 0.2126f * lin_channel(COL_R(c)) + 0.7152f * lin_channel(COL_G(c)) + 0.0722f * lin_channel(COL_B(c));
+}
+
+static float contrast(Color a, Color b)
+{
+    float la = luminance(a), lb = luminance(b);
+    return la > lb ? (la + 0.05f) / (lb + 0.05f) : (lb + 0.05f) / (la + 0.05f);
+}
+
+/* `top` with its alpha drawn over an opaque `bottom`. */
+static Color over(Color top, Color bottom)
+{
+    float a = COL_A(top) / 255.0f;
+    return RGB((int)(COL_R(top) * a + COL_R(bottom) * (1.0f - a)), (int)(COL_G(top) * a + COL_G(bottom) * (1.0f - a)),
+               (int)(COL_B(top) * a + COL_B(bottom) * (1.0f - a)));
+}
+
+/*
+ * Palette check: draws the same scene (spikes, blocks, a saw, an orb, a pad)
+ * in every palette into one image, and prints how well obstacles stand out
+ * from the background behind them (worst case over the band of screen where
+ * they appear, from the ground line up four blocks).
+ */
+static int cmd_palettes(const char *out, float min_ratio)
+{
+    static const char *const scene[] = {
+        "#name palettes",
+        "|                    y        ",
+        "|               @             ",
+        "|          ^          ##      ",
+        "|  ^^  ^  ###   ^^ Y  ## ^^^  ",
+        "",
+        NULL,
+    };
+    Level *L = level_parse(scene);
+    offscreen_init(1600, 448);
+    SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
+    SDL_RenderClear(s_ren);
+    int bad = 0;
+    printf("palette  spike body  spike edge  block fill  block edge   (contrast against the background)\n");
+    for (int i = 0; i < PALETTE_COUNT; i++) {
+        const Palette *pal = &g_palettes[i];
+        View v = {-1.0f, -2.4f, 1.0f, 0.0f, pal};
+        SDL_Rect vp = {(i % 5) * 320, (i / 5) * 224, 320, 224};
+        SDL_RenderSetViewport(s_ren, &vp);
+        gfx_sdl_begin(s_ren, 0.5f, 0.5f);
+        render_background(&v);
+        render_ground(&v, 0.0f, CORRIDOR_H, 0.0f);
+        render_level(&v, L, NULL, 0);
+        char name[8];
+        snprintf(name, sizeof(name), "%d", i);
+        font_draw(12, 10, 3.0f, COL_WHITE, ALIGN_LEFT, name);
+        gfx_sdl_flush();
+
+        /* worst case over the band where obstacles sit */
+        float ws = 99, we = 99, wf = 99, wb = 99;
+        for (float y = view_sy(&v, 4.0f); y <= view_sy(&v, 0.0f); y += 8.0f) {
+            Color bg = col_lerp(pal->bg_top, pal->bg_bot, y / SCREEN_H);
+            Color fill = over(pal->block_fill, bg);
+            ws = minf(ws, contrast(over(SPIKE_FILL, bg), bg));
+            we = minf(we, contrast(pal->block_edge, bg));
+            wf = minf(wf, contrast(fill, bg));
+            wb = minf(wb, contrast(pal->block_edge, fill));
+        }
+        float best = maxf(ws, we); /* a spike shows by its body or its outline */
+        int fail = min_ratio > 0.0f && best < min_ratio;
+        bad += fail;
+        printf("%7d  %10.2f  %10.2f  %10.2f  %10.2f%s\n", i, (double)ws, (double)we, (double)wf, (double)wb,
+               fail ? "   TOO LOW" : "");
+    }
+    SDL_RenderSetViewport(s_ren, NULL);
+    SDL_RenderPresent(s_ren);
+    SDL_SaveBMP(s_surf, out);
+    printf("wrote %s\n", out);
+    level_free(L);
+    return bad;
 }
 
 static int cmd_prof(int idx)
@@ -935,6 +1118,14 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "smoke")) return cmd_smoke() ? 1 : 0;
     if (!strcmp(cmd, "prof") && argc >= 3) return cmd_prof(level_arg(argv[2]));
     if (!strcmp(cmd, "ruler") && argc >= 3) return cmd_ruler(level_arg(argv[2]));
+    if (!strcmp(cmd, "palettes") && argc >= 3) return cmd_palettes(argv[2], argc > 3 ? (float)atof(argv[3]) : 0.0f) ? 1 : 0;
+    if (!strcmp(cmd, "orbs") && argc >= 3) {
+        int min = argc > 3 ? atoi(argv[3]) : 0, bad = 0;
+        if (strcmp(argv[2], "all")) bad += cmd_orbs(level_arg(argv[2]), min);
+        else
+            for (int i = 0; i < g_level_count; i++) bad += cmd_orbs(i, min);
+        return bad ? 1 : 0;
+    }
     if (!strcmp(cmd, "script") && argc >= 3) return cmd_script(level_arg(argv[2]), argc > 3 ? atoi(argv[3]) : 0);
     if (!strcmp(cmd, "rhythm") && argc >= 3) {
         int tol = argc > 3 ? atoi(argv[3]) : 2, fails = 0;

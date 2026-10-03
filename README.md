@@ -118,7 +118,7 @@ a hyphen (`v1.1.0-rc1`) become pre-releases.
 ## Testing
 
 ```sh
-make -f Makefile.host test        # data checks, smoke test, solver, rhythm, coins
+make -f Makefile.host test        # data checks, smoke test, solver, rhythm, coins, contrast
 make -f Makefile.host test-full   # also proves levels beatable at 30 and 20 Hz input
 scripts/emu-test.sh               # run the real PS2 ELF in the Play! core, headless
 ```

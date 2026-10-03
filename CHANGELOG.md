@@ -42,6 +42,13 @@ First release.
 - The other levels were retimed so their jumps land on the beat too.
 - Songs keep a kick drum from the first bar, and the music is offset by the
   audio latency so that what you hear matches the level.
+- Neon Steps' orbs sit one row lower, where they are easy to tap. Orbs in
+  Skyward Pulse moved so that they can be tapped on the beat too: the rhythm
+  check no longer lets a held button fire an orb.
+- Obstacles stand out better: spikes, saws and blocks glow in their outline
+  colour, outlines are thicker, and the background squares are fainter and
+  thinner so they can't be mistaken for blocks. This helps most in the dark
+  red and night palettes.
 
 ### Fixed
 
