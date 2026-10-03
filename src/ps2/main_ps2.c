@@ -2,9 +2,14 @@
  * PlayStation 2 entry point.
  *
  * Boot sequence: reset the IOP to a clean state, load the controller,
- * memory card and audio modules (embedded IRX images via ps2_drivers),
- * then run the game loop locked to vsync. Game logic always ticks at
- * 60 Hz; on PAL (50 Hz) consoles an accumulator runs extra ticks.
+ * memory card and audio modules, then run the game loop.
+ *
+ * Frame pacing: the loop sleeps on a semaphore that the vblank interrupt
+ * signals and flips right at the start of the vblank. It runs above the
+ * audio thread, so the synthesizer only uses the time the loop spends
+ * asleep and can never push a flip past the vblank. Game logic ticks at a
+ * fixed 60 Hz; each frame is drawn interpolated to the moment it will be on
+ * screen, which keeps the scrolling even at 59.94 Hz (NTSC) and 50 Hz (PAL).
  */
 #include <kernel.h>
 #include <sifrpc.h>
@@ -12,6 +17,7 @@
 #include <sbv_patches.h>
 #include <loadfile.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <gsKit.h>
 
@@ -19,18 +25,66 @@
 #include "../core/audio.h"
 #include "../core/game.h"
 
-#define MAIN_THREAD_PRIORITY 0x40
+#define MAIN_THREAD_PRIORITY 0x20 /* above the audio thread (audio_ps2.c) */
+#define MAX_TICKS_PER_FRAME 5
 
-/* Counts vertical blanks so the loop knows how much real time passed. */
 static volatile unsigned s_vblanks;
+static int s_vblank_sema = -1;
 
 static int vblank_handler(int cause)
 {
     (void)cause;
     s_vblanks++;
+    iSignalSema(s_vblank_sema);
     ExitHandler();
     return 0;
 }
+
+/* Sleep until the next vblank starts; returns the vblank count. */
+static unsigned wait_vblank(void)
+{
+    /* forget vblanks that passed while the frame was being built (the frame
+     * missed them) so it is shown at the start of the next one */
+    while (PollSema(s_vblank_sema) >= 0) {
+    }
+    WaitSema(s_vblank_sema);
+    return s_vblanks;
+}
+
+#ifdef PD_PERF
+/* Per-phase EE cycle statistics, printed every few seconds (make PERF=1). */
+enum { PF_TICK, PF_DRAW, PF_SUBMIT, PF_IDLE, PF_FLIP, PF_COUNT };
+static const char *const PF_NAMES[PF_COUNT] = {"tick", "draw", "submit", "idle", "flip"};
+static unsigned s_pf_sum[PF_COUNT], s_pf_max[PF_COUNT];
+
+static void perf_add(int phase, unsigned cycles)
+{
+    s_pf_sum[phase] += cycles;
+    if (cycles > s_pf_max[phase]) s_pf_max[phase] = cycles;
+}
+
+static void perf_report(unsigned frames, unsigned late, float refresh)
+{
+    static unsigned last_mix;
+    unsigned mix = audio_ps2_mix_cycles();
+    float frame_cycles = PS2_EE_HZ / refresh;
+    char status[128];
+    game_status(status, sizeof(status));
+    printf("pulsedash: perf %u frames, %u late |", frames, late);
+    for (int i = 0; i < PF_COUNT; i++) {
+        printf(" %s %.1f/%.1f%%", PF_NAMES[i], 100.0f * s_pf_sum[i] / frames / frame_cycles,
+               100.0f * s_pf_max[i] / frame_cycles);
+        s_pf_sum[i] = s_pf_max[i] = 0;
+    }
+    printf(" | audio %.1f%% | %s\n", 100.0f * (mix - last_mix) / frames / frame_cycles, status);
+    last_mix = mix;
+}
+#define PERF_MARK(var) unsigned var = ps2_cycles()
+#define PERF_ADD(phase, from, to) perf_add(phase, (to) - (from))
+#else
+#define PERF_MARK(var)
+#define PERF_ADD(phase, from, to)
+#endif
 
 static void reset_iop(void)
 {
@@ -68,10 +122,6 @@ int main(int argc, char *argv[])
     (void)argv;
     reset_iop();
 
-    /*
-     * The game loop busy-waits for vsync inside gsKit, so it must run below
-     * the audio thread and the SDK's helper threads or it would starve them.
-     */
     ChangeThreadPriority(GetThreadId(), MAIN_THREAD_PRIORITY);
     printf("pulsedash: boot\n");
     if (gfx_ps2_init() < 0) {
@@ -91,41 +141,64 @@ int main(int argc, char *argv[])
            mc_ok, snd_ok, gfx_ps2_is_pal());
     game_init();
 
-    const float frame_dt = gfx_ps2_is_pal() ? 1.0f / 50.0f : 1.0f / 60.0f;
-    float acc = 0.0f;
+    ee_sema_t sema;
+    memset(&sema, 0, sizeof(sema));
+    sema.init_count = 0;
+    sema.max_count = 255;
+    s_vblank_sema = CreateSema(&sema);
     gsKit_add_vsync_handler(vblank_handler);
-    unsigned last_vblank = s_vblanks;
-    unsigned frame = 0;
-    char status[128];
+
+    const float frame_dt = 1.0f / gfx_ps2_refresh_hz();
+    /* how far the simulation runs ahead of the frame being drawn, in seconds
+     * (0 <= ahead < one tick) */
+    float ahead = 0.0f;
+    unsigned shown = wait_vblank();
+    unsigned elapsed = 1; /* vblanks between the last two flips */
+#ifdef PD_PERF
+    unsigned perf_frames = 0, perf_late = 0, attempts = 0;
+#endif
     for (;;) {
-        if ((++frame % 600) == 0) {
-            game_status(status, sizeof(status));
-            int ps, pr, po;
-            pad_ps2_debug(&ps, &pr, &po);
-            int al, aa, aq;
-            audio_ps2_debug(&al, &aa, &aq);
-            printf("pulsedash: frame %u %s pad(open=%d state=%d raw=%04x) audio(chunks=%u loops=%d avail=%d queued=%d)\n",
-                   frame, status, po, ps, pr, audio_ps2_chunks(), al, aa, aq);
-        }
+        PERF_MARK(c0);
         uint32_t held = pad_ps2_read();
-        /* advance by the real number of vblanks (frame skipping keeps the
-         * game and music in sync if a frame ever runs long) */
-        unsigned now = s_vblanks;
-        unsigned elapsed = now - last_vblank;
-        last_vblank = now;
-        if (elapsed < 1) elapsed = 1;
-        if (elapsed > 4) elapsed = 4;
-        acc += frame_dt * (float)elapsed;
+        /* this frame goes up `elapsed` vblanks after the previous one (one,
+         * unless the previous frame missed its vblank) */
+        ahead -= frame_dt * (float)(elapsed < 4 ? elapsed : 4);
         int n = 0;
-        while (acc >= TICK_DT * 0.999f && n < 5) {
+        while (ahead < 0.0f && n < MAX_TICKS_PER_FRAME) {
             game_tick(held);
-            acc -= TICK_DT;
+            ahead += TICK_DT;
             n++;
         }
-        if (n == 5) acc = 0.0f;
+        if (ahead < 0.0f) ahead = 0.0f; /* long stall (memory card): skip ahead */
+        PERF_MARK(c1);
         gfx_ps2_begin();
-        game_render();
-        gfx_ps2_end();
+        game_render(1.0f - ahead / TICK_DT);
+        PERF_MARK(c2);
+        gfx_ps2_submit();
+        PERF_MARK(c3);
+        unsigned now = wait_vblank();
+        PERF_MARK(c4);
+        gfx_ps2_flip();
+        elapsed = now - shown;
+        shown = now;
+#ifdef PD_PERF
+        unsigned c5 = ps2_cycles();
+        PERF_ADD(PF_TICK, c0, c1);
+        PERF_ADD(PF_DRAW, c1, c2);
+        PERF_ADD(PF_SUBMIT, c2, c3);
+        PERF_ADD(PF_IDLE, c3, c4);
+        PERF_ADD(PF_FLIP, c4, c5);
+        perf_late += elapsed > 1;
+        if (game_attempts_started() != attempts) {
+            /* scripted test runs (scripts/emu-test.sh) time their input from this */
+            attempts = game_attempts_started();
+            printf("PD_MARK attempt %u\n", attempts);
+        }
+        if (++perf_frames == 300) {
+            perf_report(perf_frames, perf_late, gfx_ps2_refresh_hz());
+            perf_frames = perf_late = 0;
+        }
+#endif
     }
     return 0;
 }

@@ -100,10 +100,13 @@ typedef struct {
 } Voice;
 
 static Voice s_v[MAX_VOICES];
-static float s_sine[SINE_N + 1];
+static float s_sine[SINE_N + 2];
 static float s_dl[DLY_LEN], s_dr[DLY_LEN];
 static int s_dpos;
-static float s_bufL[CTRL], s_bufR[CTRL], s_sendL[CTRL], s_sendR[CTRL];
+/* Mix buses for one control block: left, right, centre (both sides) and the
+ * echo send (mono). s_blk holds the voice being rendered. */
+static float s_bufL[CTRL], s_bufR[CTRL], s_bufM[CTRL], s_send[CTRL];
+static float s_blk[CTRL];
 
 /* playback state (audio thread) */
 static int s_song = -1;
@@ -115,6 +118,8 @@ static int s_seq_idx;
 static float s_step_samples;
 static float s_sc_t = 10.0f; /* time since last kick (sidechain) */
 static float s_music_gain = 0.64f, s_sfx_gain = 0.64f;
+static float s_latency;    /* seconds between mixing and hearing (frontend) */
+static float s_user_delay; /* the player's extra delay setting */
 static float s_track_vol[SONG_TRACKS];
 static int s_track_inst[SONG_TRACKS];
 static int s_delay_samples = 12000;
@@ -474,13 +479,19 @@ static void note_on(int track, int inst, int note, int vel, float len_sec)
     if (in->kind == K_KICK && track >= 0) s_sc_t = 0.0f;
 }
 
+/* Phase in [0, 1) -> sine (table lookup, no floorf: it is slow on the EE). */
 static inline float sine_lu(float ph)
 {
-    ph -= floorf(ph);
     float x = ph * SINE_N;
     int i = (int)x;
-    float fr = x - i;
-    return s_sine[i] + (s_sine[i + 1] - s_sine[i]) * fr;
+    return s_sine[i] + (s_sine[i + 1] - s_sine[i]) * (x - (float)i);
+}
+
+/* Any (small) phase -> [0, 1). */
+static inline float wrap01(float ph)
+{
+    ph -= (float)(int)ph;
+    return ph < 0.0f ? ph + 1.0f : ph;
 }
 
 static inline float polyblep(float t, float dt)
@@ -521,6 +532,12 @@ static inline float pulse_blep(float ph, float dt, float pw)
     return v;
 }
 
+static inline float phase_step(float ph, float dt)
+{
+    ph += dt;
+    return ph >= 1.0f ? ph - 1.0f : ph;
+}
+
 static float onepole_coef(float hz)
 {
     if (hz > SRF * 0.45f) hz = SRF * 0.45f;
@@ -549,10 +566,105 @@ static float env_advance(Voice *v, const InstDef *in, float dt)
     return e;
 }
 
+/* Hand-clap envelope: three quick bursts, then a decaying tail. */
+static float clap_env(float t)
+{
+    if (t < 0.033f) return expf(-(t - 0.011f * (float)(int)(t / 0.011f)) * 260.0f);
+    return 0.9f * expf(-(t - 0.033f) * 13.0f);
+}
+
+/* Adds the rendered block (s_blk) to the buses. */
+static void bus_mix(int n, float pan, float gl, float gr, float send)
+{
+    const float *o = s_blk;
+    if (pan == 0.0f) {
+        for (int i = 0; i < n; i++) s_bufM[i] += o[i] * gl;
+    } else {
+        for (int i = 0; i < n; i++) {
+            s_bufL[i] += o[i] * gl;
+            s_bufR[i] += o[i] * gr;
+        }
+    }
+    if (send > 0.0f)
+        for (int i = 0; i < n; i++) s_send[i] += o[i] * send;
+}
+
+/* Raw oscillator for one block into s_blk (phases advance). */
+static void render_osc(Voice *v, const InstDef *in, int n, float dt, float t0, float t1)
+{
+    float *o = s_blk;
+    float p0 = v->ph[0], p1 = v->ph[1], p2 = v->ph[2];
+    switch (in->wave) {
+    case W_SAW:
+        for (int i = 0; i < n; i++) {
+            o[i] = saw_blep(p0, dt);
+            p0 = phase_step(p0, dt);
+        }
+        break;
+    case W_PULSE: {
+        float pw = in->pw;
+        for (int i = 0; i < n; i++) {
+            o[i] = pulse_blep(p0, dt, pw);
+            p0 = phase_step(p0, dt);
+        }
+        break;
+    }
+    case W_TRI:
+        for (int i = 0; i < n; i++) {
+            o[i] = 4.0f * fabsf(p0 - 0.5f) - 1.0f;
+            p0 = phase_step(p0, dt);
+        }
+        break;
+    case W_SINE:
+        for (int i = 0; i < n; i++) {
+            o[i] = sine_lu(p0);
+            p0 = phase_step(p0, dt);
+        }
+        break;
+    case W_SUPER: {
+        float det = in->detune > 0.0f ? in->detune : 0.0f;
+        float dt_hi = dt * (1.0f + det * 0.0578f), dt_lo = dt * (1.0f - det * 0.0578f);
+        for (int i = 0; i < n; i++) {
+            o[i] = (saw_blep(p0, dt) + saw_blep(p1, dt_hi) + saw_blep(p2, dt_lo)) * 0.45f;
+            p0 = phase_step(p0, dt);
+            p1 = phase_step(p1, dt_hi);
+            p2 = phase_step(p2, dt_lo);
+        }
+        break;
+    }
+    case W_FM: {
+        /* modulation index decays over the note (interpolated per block) */
+        float idx = 2.2f * 0.16f * expf(-t0 * 5.0f), idx1 = 2.2f * 0.16f * expf(-t1 * 5.0f);
+        float didx = (idx1 - idx) / (float)n, dm = dt * 3.5f;
+        for (int i = 0; i < n; i++) {
+            p1 = phase_step(p1, dm);
+            o[i] = sine_lu(wrap01(p0 + idx * sine_lu(p1)));
+            idx += didx;
+            p0 = phase_step(p0, dt);
+        }
+        break;
+    }
+    default:
+        for (int i = 0; i < n; i++) o[i] = 0.0f;
+        break;
+    }
+    if (in->sub > 0.0f) {
+        float sub = in->sub, keep = 1.0f - in->sub * 0.5f, ds = dt * 0.5f;
+        for (int i = 0; i < n; i++) {
+            p2 = phase_step(p2, ds);
+            o[i] = o[i] * keep + sine_lu(p2) * sub;
+        }
+    }
+    v->ph[0] = p0;
+    v->ph[1] = p1;
+    v->ph[2] = p2;
+}
+
 static void render_voice(Voice *v, int n)
 {
     const InstDef *in = &INST[v->inst];
-    const float dt_blk = n / SRF;
+    const float dt_blk = n / SRF, inv_n = 1.0f / (float)n;
+    float *o = s_blk;
     float gain;
     int music = v->track >= 0;
     if (music) {
@@ -565,10 +677,7 @@ static void render_voice(Voice *v, int n)
     if (in->duck > 0.0f && music) gain *= 1.0f - in->duck * expf(-s_sc_t * 9.0f);
 
     float pan = in->pan;
-    float gl = 0.5f - pan * 0.5f, gr = 0.5f + pan * 0.5f;
-    gl = sqrtf(gl) * 1.41f;
-    gr = sqrtf(gr) * 1.41f;
-    float send = in->send;
+    float gl = sqrtf(0.5f - pan * 0.5f) * 1.41f, gr = sqrtf(0.5f + pan * 0.5f) * 1.41f;
 
     /* gate handling */
     if (v->gate) {
@@ -580,104 +689,101 @@ static void render_voice(Voice *v, int n)
     }
 
     float t0 = v->t, t1 = v->t + dt_blk;
-    float a0, a1;
 
     switch (in->kind) {
     case K_KICK: {
+        /* sine with a falling pitch, plus a click at the very start */
         float pitch_base = in->vol > 0.8f ? 46.0f : 38.0f;
-        float f0 = pitch_base + 140.0f * expf(-t0 * 28.0f), f1 = pitch_base + 140.0f * expf(-t1 * 28.0f);
-        a0 = expf(-t0 * 6.5f);
-        a1 = expf(-t1 * 6.5f);
+        float f = (pitch_base + 140.0f * expf(-t0 * 28.0f)) / SRF;
+        float df = ((pitch_base + 140.0f * expf(-t1 * 28.0f)) / SRF - f) * inv_n;
+        float a = expf(-t0 * 6.5f) * gain, da = (expf(-t1 * 6.5f) * gain - a) * inv_n;
+        float ph = v->ph[0];
         for (int i = 0; i < n; i++) {
-            float fr = (float)i / n;
-            float f = f0 + (f1 - f0) * fr;
-            v->ph[0] += f / SRF;
-            if (v->ph[0] >= 1.0f) v->ph[0] -= 1.0f;
-            float tt = t0 + i / SRF;
-            float s = sine_lu(v->ph[0]) * (a0 + (a1 - a0) * fr);
-            if (tt < 0.004f) s += noise(&v->rng) * 0.35f * (1.0f - tt / 0.004f);
-            s *= gain;
-            s_bufL[i] += s;
-            s_bufR[i] += s;
+            ph = phase_step(ph, f);
+            o[i] = sine_lu(ph) * a;
+            f += df;
+            a += da;
         }
+        v->ph[0] = ph;
+        if (t0 < 0.004f) {
+            for (int i = 0; i < n; i++) {
+                float tt = t0 + (float)i * (1.0f / SRF);
+                if (tt < 0.004f) o[i] += noise(&v->rng) * 0.35f * (1.0f - tt * 250.0f) * gain;
+            }
+        }
+        bus_mix(n, 0.0f, 1.0f, 1.0f, 0.0f);
         if (t1 > 0.6f) v->on = 0;
         break;
     }
     case K_SNARE: {
-        a0 = expf(-t0 * 15.0f);
-        a1 = expf(-t1 * 15.0f);
-        float b0 = expf(-t0 * 32.0f), b1 = expf(-t1 * 32.0f);
-        const float hp = 0.12f, lp = 0.65f;
+        float a = expf(-t0 * 15.0f) * 0.9f * gain, da = (expf(-t1 * 15.0f) * 0.9f * gain - a) * inv_n;
+        float b = expf(-t0 * 32.0f) * 0.55f * gain, db = (expf(-t1 * 32.0f) * 0.55f * gain - b) * inv_n;
+        float nlp = v->nlp, nlp2 = v->nlp2, ph = v->ph[0];
+        const float hp = 0.12f, lp = 0.65f, f = 185.0f / SRF;
         for (int i = 0; i < n; i++) {
-            float fr = (float)i / n;
             float nz = noise(&v->rng);
-            v->nlp += hp * (nz - v->nlp);
-            float h = nz - v->nlp;
-            v->nlp2 += lp * (h - v->nlp2);
-            v->ph[0] += 185.0f / SRF;
-            if (v->ph[0] >= 1.0f) v->ph[0] -= 1.0f;
-            float s = v->nlp2 * (a0 + (a1 - a0) * fr) * 0.9f + sine_lu(v->ph[0]) * (b0 + (b1 - b0) * fr) * 0.55f;
-            s *= gain;
-            s_bufL[i] += s * gl;
-            s_bufR[i] += s * gr;
-            s_sendL[i] += s * send;
-            s_sendR[i] += s * send;
+            nlp += hp * (nz - nlp);
+            nlp2 += lp * ((nz - nlp) - nlp2);
+            ph = phase_step(ph, f);
+            o[i] = nlp2 * a + sine_lu(ph) * b;
+            a += da;
+            b += db;
         }
+        v->nlp = nlp;
+        v->nlp2 = nlp2;
+        v->ph[0] = ph;
+        bus_mix(n, pan, gl, gr, in->send);
         if (t1 > 0.45f) v->on = 0;
         break;
     }
     case K_CLAP: {
+        float e = clap_env(t0) * gain * 1.4f, de = (clap_env(t1) * gain * 1.4f - e) * inv_n;
+        float nlp = v->nlp, nlp2 = v->nlp2;
         const float hp = 0.08f, lp = 0.45f;
         for (int i = 0; i < n; i++) {
-            float tt = t0 + i / SRF;
-            float e;
-            if (tt < 0.033f) e = expf(-fmodf(tt, 0.011f) * 260.0f);
-            else e = 0.9f * expf(-(tt - 0.033f) * 13.0f);
             float nz = noise(&v->rng);
-            v->nlp += hp * (nz - v->nlp);
-            float h = nz - v->nlp;
-            v->nlp2 += lp * (h - v->nlp2);
-            float s = v->nlp2 * e * gain * 1.4f;
-            s_bufL[i] += s * gl;
-            s_bufR[i] += s * gr;
-            s_sendL[i] += s * send;
-            s_sendR[i] += s * send;
+            nlp += hp * (nz - nlp);
+            nlp2 += lp * ((nz - nlp) - nlp2);
+            o[i] = nlp2 * e;
+            e += de;
         }
+        v->nlp = nlp;
+        v->nlp2 = nlp2;
+        bus_mix(n, pan, gl, gr, in->send);
         if (t1 > 0.5f) v->on = 0;
         break;
     }
     case K_HAT: {
         float rate = v->open ? 9.0f : 48.0f;
-        a0 = expf(-t0 * rate);
-        a1 = expf(-t1 * rate);
+        float a = expf(-t0 * rate) * gain, da = (expf(-t1 * rate) * gain - a) * inv_n;
+        float nlp = v->nlp;
         for (int i = 0; i < n; i++) {
-            float fr = (float)i / n;
             float nz = noise(&v->rng);
-            v->nlp += 0.55f * (nz - v->nlp);
-            float h = nz - v->nlp;
-            float s = h * (a0 + (a1 - a0) * fr) * gain;
-            s_bufL[i] += s * gl;
-            s_bufR[i] += s * gr;
+            nlp += 0.55f * (nz - nlp);
+            o[i] = (nz - nlp) * a;
+            a += da;
         }
+        v->nlp = nlp;
+        bus_mix(n, pan, gl, gr, 0.0f);
         if (t1 > (v->open ? 0.6f : 0.2f)) v->on = 0;
         break;
     }
     case K_NOISE: {
         /* falling noise sweep (death) */
-        float c0 = onepole_coef(7000.0f * expf(-t0 * 7.0f) + 150.0f);
-        float c1 = onepole_coef(7000.0f * expf(-t1 * 7.0f) + 150.0f);
-        a0 = expf(-t0 * 4.5f);
-        a1 = expf(-t1 * 4.5f);
+        float c = onepole_coef(7000.0f * expf(-t0 * 7.0f) + 150.0f);
+        float dc = (onepole_coef(7000.0f * expf(-t1 * 7.0f) + 150.0f) - c) * inv_n;
+        float a = expf(-t0 * 4.5f) * gain * 1.6f, da = (expf(-t1 * 4.5f) * gain * 1.6f - a) * inv_n;
+        float nlp = v->nlp, nlp2 = v->nlp2;
         for (int i = 0; i < n; i++) {
-            float fr = (float)i / n;
-            float c = c0 + (c1 - c0) * fr;
-            float nz = noise(&v->rng);
-            v->nlp += c * (nz - v->nlp);
-            v->nlp2 += c * (v->nlp - v->nlp2);
-            float s = v->nlp2 * (a0 + (a1 - a0) * fr) * gain * 1.6f;
-            s_bufL[i] += s;
-            s_bufR[i] += s;
+            nlp += c * (noise(&v->rng) - nlp);
+            nlp2 += c * (nlp - nlp2);
+            o[i] = nlp2 * a;
+            c += dc;
+            a += da;
         }
+        v->nlp = nlp;
+        v->nlp2 = nlp2;
+        bus_mix(n, 0.0f, 1.0f, 1.0f, 0.0f);
         if (t1 > 0.9f) v->on = 0;
         break;
     }
@@ -694,58 +800,26 @@ static void render_voice(Voice *v, int n)
             float depth = in->vib * minf(1.0f, (t0 - 0.18f) * 3.0f);
             f *= 1.0f + depth * 0.0578f * sinf(t0 * 2.0f * PI * 5.5f);
         }
-        float dt = f / SRF;
         float e0 = v->env;
         float e1 = env_advance(v, in, dt_blk);
         v->env = e1;
         if (v->stage == 2 && e1 < 0.0004f) {
             v->on = 0;
         }
-        float cut = in->cut + in->cut_env * expf(-t0 * in->cut_decay);
-        float cc = onepole_coef(cut);
-        float det = in->detune > 0.0f ? in->detune : 0.0f;
-        float dt_hi = dt * (1.0f + det * 0.0578f), dt_lo = dt * (1.0f - det * 0.0578f);
-        float sub = in->sub;
+        render_osc(v, in, n, f / SRF, t0, t1);
+        /* two one-pole low-passes, then the envelope */
+        float cc = onepole_coef(in->cut + in->cut_env * expf(-t0 * in->cut_decay));
+        float lp1 = v->lp1, lp2 = v->lp2;
+        float e = e0 * gain, de = (e1 - e0) * gain * inv_n;
         for (int i = 0; i < n; i++) {
-            float fr = (float)i / n;
-            float s;
-            float p0 = v->ph[0];
-            switch (in->wave) {
-            case W_SAW: s = saw_blep(p0, dt); break;
-            case W_PULSE: s = pulse_blep(p0, dt, in->pw); break;
-            case W_TRI: s = 4.0f * fabsf(p0 - 0.5f) - 1.0f; break;
-            case W_SINE: s = sine_lu(p0); break;
-            case W_SUPER:
-                s = (saw_blep(p0, dt) + saw_blep(v->ph[1], dt_hi) + saw_blep(v->ph[2], dt_lo)) * 0.45f;
-                v->ph[1] += dt_hi;
-                if (v->ph[1] >= 1.0f) v->ph[1] -= 1.0f;
-                v->ph[2] += dt_lo;
-                if (v->ph[2] >= 1.0f) v->ph[2] -= 1.0f;
-                break;
-            case W_FM: {
-                float idx = 2.2f * expf(-(t0 + i / SRF) * 5.0f);
-                v->ph[1] += dt * 3.5f;
-                if (v->ph[1] >= 1.0f) v->ph[1] -= 1.0f;
-                s = sine_lu(p0 + idx * sine_lu(v->ph[1]) * 0.16f);
-                break;
-            }
-            default: s = 0.0f; break;
-            }
-            if (sub > 0.0f) {
-                v->ph[2] += dt * 0.5f;
-                if (v->ph[2] >= 1.0f) v->ph[2] -= 1.0f;
-                s = s * (1.0f - sub * 0.5f) + sine_lu(v->ph[2]) * sub;
-            }
-            v->ph[0] = p0 + dt;
-            if (v->ph[0] >= 1.0f) v->ph[0] -= 1.0f;
-            v->lp1 += cc * (s - v->lp1);
-            v->lp2 += cc * (v->lp1 - v->lp2);
-            float o = v->lp2 * (e0 + (e1 - e0) * fr) * gain;
-            s_bufL[i] += o * gl;
-            s_bufR[i] += o * gr;
-            s_sendL[i] += o * send;
-            s_sendR[i] += o * send;
+            lp1 += cc * (o[i] - lp1);
+            lp2 += cc * (lp1 - lp2);
+            o[i] = lp2 * e;
+            e += de;
         }
+        v->lp1 = lp1;
+        v->lp2 = lp2;
+        bus_mix(n, pan, gl, gr, in->send);
         break;
     }
     }
@@ -872,7 +946,7 @@ static void process_commands(void)
 
 void audio_init(void)
 {
-    for (int i = 0; i <= SINE_N; i++) s_sine[i] = sinf((float)i / SINE_N * 2.0f * PI);
+    for (int i = 0; i <= SINE_N + 1; i++) s_sine[i] = sinf((float)i / SINE_N * 2.0f * PI);
     memset(s_v, 0, sizeof(s_v));
     memset(s_dl, 0, sizeof(s_dl));
     memset(s_dr, 0, sizeof(s_dr));
@@ -892,8 +966,8 @@ void audio_mix(int16_t *out, int frames)
         sfx_advance(n);
         memset(s_bufL, 0, sizeof(float) * (size_t)n);
         memset(s_bufR, 0, sizeof(float) * (size_t)n);
-        memset(s_sendL, 0, sizeof(float) * (size_t)n);
-        memset(s_sendR, 0, sizeof(float) * (size_t)n);
+        memset(s_bufM, 0, sizeof(float) * (size_t)n);
+        memset(s_send, 0, sizeof(float) * (size_t)n);
         for (int i = 0; i < MAX_VOICES; i++)
             if (s_v[i].on) render_voice(&s_v[i], n);
         s_sc_t += n / SRF;
@@ -903,11 +977,11 @@ void audio_mix(int16_t *out, int frames)
             int rp = s_dpos - s_delay_samples;
             if (rp < 0) rp += DLY_LEN;
             float el = s_dl[rp], er = s_dr[rp];
-            s_dl[s_dpos] = s_sendL[i] + er * 0.38f;
-            s_dr[s_dpos] = s_sendR[i] * 0.6f + el * 0.38f;
+            s_dl[s_dpos] = s_send[i] + er * 0.38f;
+            s_dr[s_dpos] = s_send[i] * 0.6f + el * 0.38f;
             s_dpos = (s_dpos + 1) & (DLY_LEN - 1);
-            float l = s_bufL[i] + el * 0.55f;
-            float r = s_bufR[i] + er * 0.55f;
+            float l = s_bufL[i] + s_bufM[i] + el * 0.55f;
+            float r = s_bufR[i] + s_bufM[i] + er * 0.55f;
             /* soft clip */
             l = clampf(l, -1.5f, 1.5f);
             r = clampf(r, -1.5f, 1.5f);
@@ -929,9 +1003,27 @@ static uint32_t next_gen(void)
     return ++m_gen;
 }
 
+void audio_set_latency(float sec)
+{
+    s_latency = sec > 0.0f ? sec : 0.0f;
+}
+
+void audio_set_user_delay(float sec)
+{
+    s_user_delay = sec;
+}
+
+/* Seconds from mixing a sample to hearing it. */
+static float heard_delay(void)
+{
+    return s_latency + s_user_delay;
+}
+
 void audio_play_song(int song, float start_sec)
 {
-    Cmd c = {CMD_PLAY, song, 0, start_sec * SRF, next_gen()};
+    /* what gets mixed now is heard heard_delay() later (a negative start
+     * just holds the song back) */
+    Cmd c = {CMD_PLAY, song, 0, (start_sec + heard_delay()) * SRF, next_gen()};
     m_song = song;
     push_cmd(c);
 }
@@ -970,7 +1062,7 @@ float audio_song_time(void)
 {
     if (m_song < 0) return 0.0f;
     if (s_pub_gen != m_gen) return 0.0f;
-    return s_pub_elapsed / SRF;
+    return s_pub_elapsed / SRF - heard_delay();
 }
 
 float audio_song_beat(void)

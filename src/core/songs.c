@@ -11,6 +11,7 @@ const PatternDef g_common_patterns[] = {
     {"k4", "x...x...x...x..."},
     {"k4f", "x...x...x...x.xx"},
     {"k2", "x.......x......."},
+    {"kint", "x...r...x...r..."},
     {"kchill", "x.......x.....x."},
     {"c24", "....c.......c..."},
     {"s24", "....x.......x..."},
@@ -31,8 +32,11 @@ const PatternDef g_common_patterns[] = {
 };
 
 /* Standard 40-bar level arrangement:
- * intro 4 | verse 8 | build 4 | drop 8 | break 4 | drop 8 | outro 4 */
-#define ARR_KICK ".*4 k4*8 k4*4 k4*8 .*4 k4*8 k4*3 ."
+ * intro 4 | verse 8 | build 4 | drop 8 | break 4 | drop 8 | outro 4
+ * The kick never stops for long (soft in the intro, half time in the
+ * break): every jump in a level falls on the beat, so the beat must be
+ * audible from the first bar. */
+#define ARR_KICK "kint*4 k4*8 k4*4 k4*8 k2*4 k4*8 k4*3 ."
 #define ARR_SNARE ".*4 c24*7 cfill sbuild c24*7 cfill .*2 sbuild2 c24*7 cfill c24*3 ."
 #define ARR_HAT "hoff*4 hoff*8 h8*4 hcrash h16*7 .*2 h8*2 hcrash h16*7 hoff*4"
 #define ARR_BASS ".*4 bassV*2 .*4 bassD*2 .*4 bassD*2 bassV"
@@ -79,6 +83,21 @@ static const SongDef SONG_PRACTICE_DEF = {
     {".*4 k2*4", ".*4 chalf*4", "hoff*8", "bass*2", "pad*2", "arp*2", NULL, ".*4 lead"},
     {0, 0, 0, INS_BASS_SUB, INS_PAD_SOFT, INS_PLUCK, INS_LEAD_SQUARE, INS_BELL},
     {0.7f, 0.7f, 0.5f, 0.9f, 1.0f, 0.7f, 1.0f, 0.8f},
+};
+
+/* ------------------------------------------------------------------ */
+/* Metronome for setting the audio delay: a kick on every beat         */
+/* ------------------------------------------------------------------ */
+static const PatternDef P_METRO[] = {
+    {"click", "C6:2 -:2 G5:2 -:2 G5:2 -:2 G5:2 -:2"}, /* high on each bar's first beat */
+    {"pad", "C4+E4+G4:16 A3+C4+E4:16"},
+    {NULL, NULL},
+};
+static const SongDef SONG_METRO_DEF = {
+    "Metronome", 120.0f, 0, P_METRO,
+    {"k4*2", NULL, "hoff*2", NULL, "pad", "click*2", NULL, NULL},
+    {0, 0, 0, 0, INS_PAD_SOFT, INS_PLUCK, 0, 0},
+    {1.0f, 0.0f, 0.5f, 0.0f, 0.6f, 0.8f, 0.0f, 0.0f},
 };
 
 /* ------------------------------------------------------------------ */
@@ -333,7 +352,7 @@ static const PatternDef P_PRISM[] = {
 };
 static const SongDef SONG_PRISM = {
     "Prism Overdrive", 160.0f, 4, P_PRISM,
-    {".*4 k4*8 k4*4 k4*8 .*4 k4*4 k4*8 k4*3 .",
+    {"kint*4 k4*8 k4*4 k4*8 k2*4 k4*4 k4*8 k4*3 .",
      ".*4 c24*7 cfill sbuild c24*7 cfill .*2 sbuild2 sbuild c24*7 cfill c24*3 .",
      "hoff*4 hoff*8 h8*4 hcrash h16*7 .*2 h8*2 h8*4 hcrash h16*7 hoff*4",
      ".*4 bassV*2 .*4 bassD*2 .*4 bassV bassD*2 bassV",
@@ -346,7 +365,7 @@ static const SongDef SONG_PRISM = {
 };
 
 const SongDef *const g_songs[] = {
-    &SONG_MENU_DEF, &SONG_PRACTICE_DEF, &SONG_NEON, &SONG_SKY, &SONG_GARDEN,
+    &SONG_MENU_DEF, &SONG_PRACTICE_DEF, &SONG_METRO_DEF, &SONG_NEON, &SONG_SKY, &SONG_GARDEN,
     &SONG_SAUCER, &SONG_WAVE, &SONG_PRISM,
 };
 const int g_song_count = (int)(sizeof(g_songs) / sizeof(g_songs[0]));

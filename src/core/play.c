@@ -14,6 +14,13 @@
 
 static PlayState *ps_get(void) { return &g_game.play; }
 
+static unsigned s_attempts_started;
+
+unsigned play_attempts_started(void)
+{
+    return s_attempts_started;
+}
+
 static int level_percent(const PlayState *ps)
 {
     int pc = (int)(ps->p.x / ps->L->end_x * 100.0f);
@@ -32,6 +39,18 @@ static void snapshot_take(const PlayState *ps, PlaySnapshot *s)
     s->pal_to = ps->pal_to;
     s->pal_t = ps->pal_t;
     s->trig_idx = ps->trig_idx;
+}
+
+/* Interpolated rendering starts from the current state (no sweep from where
+ * the player was before a respawn or teleport). */
+static void snap_prev(PlayState *ps)
+{
+    ps->prev_cam_x = ps->cam_x;
+    ps->prev_cam_y = ps->cam_y;
+    ps->prev_x = ps->p.x;
+    ps->prev_y = ps->p.y;
+    ps->prev_rot = ps->rot;
+    ps->prev_angle = ps->vis_angle;
 }
 
 static void reset_visuals(PlayState *ps)
@@ -72,9 +91,11 @@ static void begin_attempt(PlayState *ps, const PlaySnapshot *from)
         ps->trig_idx = 0;
     }
     ps->cam_x = ps->p.x - CAM_PLAYER_X;
+    snap_prev(ps);
     ps->phase = PH_RUN;
     ps->phase_t = 0.0f;
     ps->attempt++;
+    s_attempts_started++;
     ps->attempt_time = 0.0f;
     if (!ps->practice) {
         audio_play_song(SONG_FIRST_LEVEL + ps->L->song, 0.0f);
@@ -386,6 +407,7 @@ void play_tick(void)
     PlayState *ps = ps_get();
     const float dt = TICK_DT;
 
+    snap_prev(ps);
     if (ps->paused) {
         pause_tick(ps);
         return;
@@ -456,42 +478,53 @@ void play_tick(void)
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
-static void draw_wave_trail(const PlayState *ps, const View *v, Color c)
+/* Player pose for the frame being drawn (interpolated between ticks). */
+typedef struct {
+    float x, y, rot, angle;
+} Pose;
+
+static void draw_wave_trail(const PlayState *ps, const View *v, const Pose *pose, Color c)
 {
     if (ps->trail_n < 2) return;
+    /* the newest point follows the drawn player rather than the last tick */
+    float tx[TRAIL_LEN], ty[TRAIL_LEN];
+    memcpy(tx, ps->trail_x, sizeof(float) * (size_t)ps->trail_n);
+    memcpy(ty, ps->trail_y, sizeof(float) * (size_t)ps->trail_n);
+    tx[0] = pose->x;
+    ty[0] = pose->y;
     gfx_blend(BLEND_ADD);
     for (int i = 0; i + 1 < ps->trail_n; i++) {
         float a0 = 1.0f - (float)i / ps->trail_n, a1 = 1.0f - (float)(i + 1) / ps->trail_n;
-        draw_line2(view_sx(v, ps->trail_x[i]), view_sy(v, ps->trail_y[i]), view_sx(v, ps->trail_x[i + 1]),
-                   view_sy(v, ps->trail_y[i + 1]), 9.0f * a0 + 2.0f, col_with_alpha(c, 0.7f * a0),
-                   col_with_alpha(c, 0.7f * a1));
+        draw_line2(view_sx(v, tx[i]), view_sy(v, ty[i]), view_sx(v, tx[i + 1]), view_sy(v, ty[i + 1]),
+                   9.0f * a0 + 2.0f, col_with_alpha(c, 0.7f * a0), col_with_alpha(c, 0.7f * a1));
     }
     gfx_blend(BLEND_ALPHA);
     for (int i = 0; i + 1 < ps->trail_n; i++) {
         float a0 = 1.0f - (float)i / ps->trail_n;
-        draw_line(view_sx(v, ps->trail_x[i]), view_sy(v, ps->trail_y[i]), view_sx(v, ps->trail_x[i + 1]),
-                  view_sy(v, ps->trail_y[i + 1]), 3.0f, col_with_alpha(COL_WHITE, 0.9f * a0));
+        draw_line(view_sx(v, tx[i]), view_sy(v, ty[i]), view_sx(v, tx[i + 1]), view_sy(v, ty[i + 1]), 3.0f,
+                  col_with_alpha(COL_WHITE, 0.9f * a0));
     }
 }
 
-static void draw_player(const PlayState *ps, const View *v)
+static void draw_player(const PlayState *ps, const View *v, const Pose *pose)
 {
     const Game *g = &g_game;
     const Player *p = &ps->p;
     Color c1 = g_player_colors[g->save.col1 % PLAYER_COLOR_COUNT];
     Color c2 = g_player_colors[g->save.col2 % PLAYER_COLOR_COUNT];
-    float sx = view_sx(v, p->x), sy = view_sy(v, p->y);
+    float sx = view_sx(v, pose->x), sy = view_sy(v, pose->y);
+    float ang = pose->angle;
     int flip = p->grav < 0;
 
-    if (p->mode == MODE_WAVE) draw_wave_trail(ps, v, c2);
+    if (p->mode == MODE_WAVE) draw_wave_trail(ps, v, pose, c2);
     draw_glow(sx, sy, BLOCK_PX * 1.3f, col_with_alpha(c1, 0.22f + 0.15f * v->pulse));
 
     switch (p->mode) {
-    case MODE_CUBE: icon_draw_cube(sx, sy, BLOCK_PX, ps->rot, g->save.icon, c1, c2); break;
-    case MODE_SHIP: icon_draw_ship(sx, sy, BLOCK_PX, flip ? -ps->vis_angle : ps->vis_angle, flip, g->save.icon, c1, c2); break;
-    case MODE_BALL: icon_draw_ball(sx, sy, BLOCK_PX, ps->rot, g->save.icon, c1, c2); break;
-    case MODE_UFO: icon_draw_ufo(sx, sy, BLOCK_PX, ps->vis_angle, flip, g->save.icon, c1, c2); break;
-    case MODE_WAVE: icon_draw_wave(sx, sy, BLOCK_PX * 0.85f, ps->vis_angle, c1, c2); break;
+    case MODE_CUBE: icon_draw_cube(sx, sy, BLOCK_PX, pose->rot, g->save.icon, c1, c2); break;
+    case MODE_SHIP: icon_draw_ship(sx, sy, BLOCK_PX, flip ? -ang : ang, flip, g->save.icon, c1, c2); break;
+    case MODE_BALL: icon_draw_ball(sx, sy, BLOCK_PX, pose->rot, g->save.icon, c1, c2); break;
+    case MODE_UFO: icon_draw_ufo(sx, sy, BLOCK_PX, ang, flip, g->save.icon, c1, c2); break;
+    case MODE_WAVE: icon_draw_wave(sx, sy, BLOCK_PX * 0.85f, ang, c1, c2); break;
     }
 }
 
@@ -607,10 +640,13 @@ void play_render(void)
 {
     const Game *g = &g_game;
     const PlayState *ps = ps_get();
+    const float a = g->alpha;
+    Pose pose = {lerpf(ps->prev_x, ps->p.x, a), lerpf(ps->prev_y, ps->p.y, a), lerpf(ps->prev_rot, ps->rot, a),
+                 lerpf(ps->prev_angle, ps->vis_angle, a)};
     View v;
     float sh = ps->shake * 0.6f;
-    v.cam_x = ps->cam_x + (sh > 0 ? (hash_f01((uint32_t)(g->t * 977.0f)) - 0.5f) * sh : 0.0f);
-    v.cam_y = ps->cam_y + (sh > 0 ? (hash_f01((uint32_t)(g->t * 731.0f) + 9u) - 0.5f) * sh : 0.0f);
+    v.cam_x = lerpf(ps->prev_cam_x, ps->cam_x, a) + (sh > 0 ? (hash_f01((uint32_t)(g->t * 977.0f)) - 0.5f) * sh : 0.0f);
+    v.cam_y = lerpf(ps->prev_cam_y, ps->cam_y, a) + (sh > 0 ? (hash_f01((uint32_t)(g->t * 731.0f) + 9u) - 0.5f) * sh : 0.0f);
     v.time = g->t;
     v.pulse = beat_pulse();
     v.pal = &ps->pal;
@@ -642,8 +678,8 @@ void play_render(void)
         }
     }
 
-    if (ps->phase != PH_DEAD) draw_player(ps, &v);
-    fx_draw(FX_WORLD, v.cam_x, v.cam_y);
+    if (ps->phase != PH_DEAD) draw_player(ps, &v, &pose);
+    fx_draw(FX_WORLD, v.cam_x, v.cam_y, (1.0f - a) * TICK_DT);
 
     if (ps->flash > 0.0f) {
         gfx_blend(BLEND_ADD);

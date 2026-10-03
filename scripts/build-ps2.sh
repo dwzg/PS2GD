@@ -14,8 +14,12 @@ if [ -n "$HTTPS_PROXY" ]; then
     fi
 fi
 
-exec docker run --rm $EXTRA -v "$PWD":/src -w /src -e OWNER="$(id -u):$(id -g)" "$IMAGE" \
+# The version comes from git on the host: inside the container the checkout
+# belongs to another user and git refuses to read it.
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+
+exec docker run --rm $EXTRA -v "$PWD":/src -w /src -e OWNER="$(id -u):$(id -g)" -e VERSION="$VERSION" "$IMAGE" \
     sh -c 'command -v make >/dev/null 2>&1 || { echo "installing make..."; apk add --no-cache make >/dev/null; }
-           make -j"$(nproc)" "$@"; status=$?
+           make -j"$(nproc)" VERSION="$VERSION" "$@"; status=$?
            [ -d build ] && chown -R "$OWNER" build
            exit $status' sh "$@"

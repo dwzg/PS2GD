@@ -5,6 +5,7 @@
 #include "common.h"
 
 #define SAVE_MAX_LEVELS 16
+#define SAVE_AUDIO_DELAY_MAX 20 /* +-200 ms */
 #define SAVE_MAGIC 0x50445356u /* "PDSV" */
 #define SAVE_VERSION 1
 
@@ -20,7 +21,8 @@ typedef struct {
     uint32_t total_attempts;
     uint8_t icon, col1, col2;
     uint8_t music_vol, sfx_vol;
-    uint8_t reserved[3];
+    int8_t audio_delay; /* extra sound delay set in the options, 10 ms units */
+    uint8_t reserved[2];
     uint32_t checksum;
 } SaveData;
 

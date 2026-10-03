@@ -6,6 +6,7 @@
 #include "font.h"
 #include "fx.h"
 #include "icons.h"
+#include "version.h"
 
 Game g_game;
 
@@ -13,11 +14,23 @@ Game g_game;
 
 float beat_pulse(void)
 {
-    if (audio_current_song() < 0) return 0.0f;
-    float b = audio_song_beat();
+    const Game *g = &g_game;
+    const PlayState *ps = &g->play;
+    int song = audio_current_song();
+    if (song < 0) return 0.0f;
+    float b;
+    if (g->screen == SCR_PLAY && !ps->practice && ps->phase == PH_RUN) {
+        /* the song started with the attempt: the level clock is exact and
+         * smoother than the audio thread's chunked position */
+        float t = ps->attempt_time - (1.0f - g->alpha) * TICK_DT;
+        b = t * audio_song_bpm(song) / 60.0f;
+    } else {
+        b = audio_song_beat();
+    }
     if (b < 0.0f) return 0.0f;
     float f = b - floorf(b);
-    return expf(-f * 5.0f);
+    float accent = ((int)b % 4) == 0 ? 1.0f : 0.65f; /* stronger on each bar's downbeat */
+    return accent * expf(-f * 5.0f);
 }
 
 static void on_enter(int scr)
@@ -69,6 +82,11 @@ void game_status(char *buf, int cap)
                  g->sel_level, audio_current_song());
 }
 
+unsigned game_attempts_started(void)
+{
+    return play_attempts_started();
+}
+
 void game_init(void)
 {
     Game *g = &g_game;
@@ -78,9 +96,11 @@ void game_init(void)
     fx_clear();
     save_load(&g->save);
     audio_set_volume(g->save.music_vol, g->save.sfx_vol);
+    audio_set_user_delay(g->save.audio_delay * 0.01f);
     g->screen = SCR_TITLE;
     g->menu_sel = 1;
-    g->title_y = 0.5f;
+    g->title_y = g->title_prev_y = 0.5f;
+    g->alpha = 1.0f;
     g->fade = 1.0f;
     g->fading = -1;
     on_enter(SCR_TITLE);
@@ -139,13 +159,20 @@ void game_tick(uint32_t held)
     fx_update(TICK_DT);
 }
 
-void game_render(void)
+void game_render(float alpha)
 {
     Game *g = &g_game;
+    /* Everything drawn below reads g->t for its animations; let it see the
+     * interpolated time so they advance as evenly as the scrolling. */
+    float tick_t = g->t;
+    /* while fading out the screen is frozen (nothing ticks): no blending */
+    g->alpha = g->fading > 0 ? 1.0f : clampf(alpha, 0.0f, 1.0f);
+    g->t -= (1.0f - g->alpha) * TICK_DT;
     gfx_blend(BLEND_ALPHA);
     if (g->screen == SCR_PLAY) play_render();
     else menus_render();
     if (g->fade > 0.0f) gfx_rect(0, 0, SCREEN_W, SCREEN_H, col_with_alpha(COL_BLACK, g->fade));
+    g->t = tick_t;
 }
 
 /* ------------------------------------------------------------------ */
@@ -183,6 +210,8 @@ static void title_tick(void)
 {
     Game *g = &g_game;
     /* little runner animation */
+    g->title_prev_y = g->title_y;
+    g->title_prev_rot = g->title_rot;
     g->title_vy -= 95.0f * TICK_DT;
     g->title_y += g->title_vy * TICK_DT;
     if (g->title_y <= 0.5f) {
@@ -241,9 +270,9 @@ static void title_render(void)
 
     /* runner */
     float gy = SCREEN_H - 2.4f * BLOCK_PX;
-    float rx = 110.0f, ry = gy - g->title_y * BLOCK_PX;
+    float rx = 110.0f, ry = gy - lerpf(g->title_prev_y, g->title_y, g->alpha) * BLOCK_PX;
     draw_glow(rx, ry, BLOCK_PX * 1.3f, col_with_alpha(c1_of(), 0.3f));
-    icon_draw_cube(rx, ry, BLOCK_PX, g->title_rot, g->save.icon, c1_of(), c2_of());
+    icon_draw_cube(rx, ry, BLOCK_PX, lerpf(g->title_prev_rot, g->title_rot, g->alpha), g->save.icon, c1_of(), c2_of());
     for (int i = 0; i < 4; i++) {
         float sx = SCREEN_W - fmodf(g->t * 6.0f * BLOCK_PX + i * 173.0f, SCREEN_W + 80.0f) + 40.0f;
         if (i & 1) render_spike(sx, gy, BLOCK_PX, BLOCK_PX * 0.92f, 0, RGBA(6, 6, 10, 235), pal.block_edge);
@@ -269,7 +298,7 @@ static void title_render(void)
     }
     font_draw(SCREEN_W / 2, SCREEN_H - 20, 2.0f, col_with_alpha(COL_WHITE, 0.7f + 0.3f * sinf(g->t * 4.0f)),
               ALIGN_CENTER, GLYPH_LEFT GLYPH_RIGHT " SELECT   " GLYPH_CROSS " OK");
-    font_draw(SCREEN_W - 8, SCREEN_H - 12, 1.0f, col_with_alpha(COL_WHITE, 0.5f), ALIGN_RIGHT, "V" GAME_VERSION);
+    font_draw(SCREEN_W - 8, SCREEN_H - 12, 1.0f, col_with_alpha(COL_WHITE, 0.5f), ALIGN_RIGHT, g_version);
 }
 
 /* --- level select --------------------------------------------------- */
@@ -495,19 +524,38 @@ static void garage_render(void)
 
 /* --- options -------------------------------------------------------- */
 
+enum { OPT_MUSIC = 0, OPT_SFX, OPT_DELAY, OPT_ERASE, OPT_BACK, OPT_COUNT };
+
 static void options_tick(void)
 {
     Game *g = &g_game;
-    if (g->repeat & BTN_UP) { g->options_sel = (g->options_sel + 3) % 4; audio_sfx(SFX_MENU_MOVE); g->erase_confirm = 0; }
-    if (g->repeat & BTN_DOWN) { g->options_sel = (g->options_sel + 1) % 4; audio_sfx(SFX_MENU_MOVE); g->erase_confirm = 0; }
+    if (g->repeat & BTN_UP) {
+        g->options_sel = (g->options_sel + OPT_COUNT - 1) % OPT_COUNT;
+        audio_sfx(SFX_MENU_MOVE);
+        g->erase_confirm = 0;
+    }
+    if (g->repeat & BTN_DOWN) {
+        g->options_sel = (g->options_sel + 1) % OPT_COUNT;
+        audio_sfx(SFX_MENU_MOVE);
+        g->erase_confirm = 0;
+    }
+    /* the metronome plays while the audio delay is being set */
+    int song = g->options_sel == OPT_DELAY ? SONG_METRONOME : SONG_MENU;
+    if (audio_current_song() != song) audio_play_song(song, 0.0f);
+
     int d = 0;
     if (g->repeat & BTN_LEFT) d = -1;
     if (g->repeat & BTN_RIGHT) d = 1;
-    if (d && g->options_sel < 2) {
-        uint8_t *v = g->options_sel == 0 ? &g->save.music_vol : &g->save.sfx_vol;
+    if (d && (g->options_sel == OPT_MUSIC || g->options_sel == OPT_SFX)) {
+        uint8_t *v = g->options_sel == OPT_MUSIC ? &g->save.music_vol : &g->save.sfx_vol;
         *v = (uint8_t)clampi(*v + d, 0, 10);
         audio_set_volume(g->save.music_vol, g->save.sfx_vol);
         audio_sfx(SFX_MENU_MOVE);
+        g->save_dirty = 1;
+    }
+    if (d && g->options_sel == OPT_DELAY) {
+        g->save.audio_delay = (int8_t)clampi(g->save.audio_delay + d, -SAVE_AUDIO_DELAY_MAX, SAVE_AUDIO_DELAY_MAX);
+        audio_set_user_delay(g->save.audio_delay * 0.01f);
         g->save_dirty = 1;
     }
     if (g->erase_confirm) {
@@ -515,21 +563,24 @@ static void options_tick(void)
         if (g->erase_t <= 0.0f) g->erase_confirm = 0;
     }
     if (g->pressed & BTN_CROSS) {
-        if (g->options_sel == 2) {
+        if (g->options_sel == OPT_ERASE) {
             if (!g->erase_confirm) {
                 g->erase_confirm = 1;
                 g->erase_t = 3.0f;
                 audio_sfx(SFX_MENU_SELECT);
             } else {
+                /* progress goes, settings stay */
                 uint8_t mv = g->save.music_vol, sv = g->save.sfx_vol;
+                int8_t delay = g->save.audio_delay;
                 save_defaults(&g->save);
                 g->save.music_vol = mv;
                 g->save.sfx_vol = sv;
+                g->save.audio_delay = delay;
                 save_store(&g->save);
                 g->erase_confirm = 0;
                 audio_sfx(SFX_DEATH);
             }
-        } else if (g->options_sel == 3) {
+        } else if (g->options_sel == OPT_BACK) {
             audio_sfx(SFX_MENU_BACK);
             screen_go(SCR_TITLE);
         }
@@ -540,26 +591,57 @@ static void options_tick(void)
     }
 }
 
+/* Help for the audio delay: four lights flash on the beats the game thinks
+ * are being heard; the player lines them up with the metronome's kick. */
+static void draw_delay_help(void)
+{
+    render_panel(60, 268, 580, 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
+    font_draw(80, 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "AUDIO DELAY");
+    font_draw(80, 304, 2.0f, COL_WHITE, ALIGN_LEFT, "LISTEN TO THE KICK, WATCH THE LIGHTS.");
+    font_draw(80, 322, 2.0f, COL_WHITE, ALIGN_LEFT, "KICK AFTER THE FLASH:  RAISE IT");
+    font_draw(80, 340, 2.0f, COL_WHITE, ALIGN_LEFT, "KICK BEFORE THE FLASH: LOWER IT");
+    float b = audio_current_song() == SONG_METRONOME ? audio_song_beat() : -1.0f;
+    int lit = b >= 0.0f ? (int)b % 4 : -1;
+    float glow = b >= 0.0f ? expf(-(b - floorf(b)) * 6.0f) : 0.0f;
+    for (int k = 0; k < 4; k++) {
+        float cx = SCREEN_W / 2 + (k - 1.5f) * 70.0f, cy = 392;
+        float r = k == 0 ? 17.0f : 13.0f; /* the bar's first beat is the big one */
+        draw_circle(cx, cy, r + 3, RGBA(0, 0, 0, 200));
+        Color off = RGBA(255, 255, 255, 40), on = k == 0 ? RGB(255, 230, 90) : RGB(90, 255, 140);
+        draw_circle(cx, cy, r, k == lit ? col_lerp(off, on, glow) : off);
+        if (k == lit && glow > 0.05f) draw_glow(cx, cy, r * 3.0f, col_with_alpha(on, 0.5f * glow));
+    }
+}
+
 static void options_render(void)
 {
     Game *g = &g_game;
     draw_menu_backdrop(&g_palettes[1], g->t * 1.5f, beat_pulse());
-    font_draw_fancy(SCREEN_W / 2, 20, 4.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, "OPTIONS");
+    font_draw_fancy(SCREEN_W / 2, 18, 4.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, "OPTIONS");
 
-    const char *labels[4] = {"MUSIC", "SOUND FX", g->erase_confirm ? "PRESS " GLYPH_CROSS " AGAIN" : "ERASE PROGRESS", "BACK"};
-    for (int i = 0; i < 4; i++) {
-        float y = 72 + i * 46;
+    const char *labels[OPT_COUNT] = {"MUSIC", "SOUND FX", "AUDIO DELAY",
+                                     g->erase_confirm ? "PRESS " GLYPH_CROSS " AGAIN" : "ERASE PROGRESS", "BACK"};
+    for (int i = 0; i < OPT_COUNT; i++) {
+        float y = 66 + i * 40;
         int sel = g->options_sel == i;
-        render_panel(110, y - 8, 530, y + 30, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
-        Color tc = i == 2 && g->erase_confirm ? RGB(255, 120, 120) : (sel ? COL_WHITE : RGB(170, 180, 200));
+        render_panel(110, y - 7, 530, y + 29, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
+        Color tc = i == OPT_ERASE && g->erase_confirm ? RGB(255, 120, 120) : (sel ? COL_WHITE : RGB(170, 180, 200));
         font_draw(130, y + 2, 3.0f, tc, ALIGN_LEFT, labels[i]);
-        if (i < 2) {
-            int v = i == 0 ? g->save.music_vol : g->save.sfx_vol;
+        if (i == OPT_MUSIC || i == OPT_SFX) {
+            int v = i == OPT_MUSIC ? g->save.music_vol : g->save.sfx_vol;
             for (int k = 0; k < 10; k++) {
                 float x = 330 + k * 18;
                 gfx_rect(x, y, x + 14, y + 22, k < v ? RGB(90, 255, 120) : RGBA(255, 255, 255, 50));
             }
+        } else if (i == OPT_DELAY) {
+            char val[24];
+            snprintf(val, sizeof(val), sel ? GLYPH_LEFT " %+d MS " GLYPH_RIGHT : "%+d MS", g->save.audio_delay * 10);
+            font_draw(426, y + 6, 2.0f, tc, ALIGN_CENTER, val);
         }
+    }
+    if (g->options_sel == OPT_DELAY) {
+        draw_delay_help();
+        return;
     }
 
     /* stats */
@@ -569,16 +651,16 @@ static void options_render(void)
         if (g->save.best[i] >= 100) done++;
         for (int k = 0; k < 3; k++) coins += (g->save.coins[i] >> k) & 1;
     }
-    render_panel(60, 262, 580, 420, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
-    font_draw(80, 276, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "CONTROLS");
-    font_draw(80, 298, 2.0f, COL_WHITE, ALIGN_LEFT, GLYPH_CROSS " / " GLYPH_CIRCLE " / UP / L1 / R1  JUMP, HOLD TO FLY");
-    font_draw(80, 316, 2.0f, COL_WHITE, ALIGN_LEFT, "START  PAUSE");
-    font_draw(80, 334, 2.0f, COL_WHITE, ALIGN_LEFT, "PRACTICE: " GLYPH_SQUARE " CHECKPOINT  " GLYPH_TRIANGLE " REMOVE");
-    font_draw(80, 362, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "STATS");
+    render_panel(60, 268, 580, 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
+    font_draw(80, 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "CONTROLS");
+    font_draw(80, 304, 2.0f, COL_WHITE, ALIGN_LEFT, GLYPH_CROSS " / " GLYPH_CIRCLE " / UP / L1 / R1  JUMP, HOLD TO FLY");
+    font_draw(80, 322, 2.0f, COL_WHITE, ALIGN_LEFT, "START  PAUSE");
+    font_draw(80, 340, 2.0f, COL_WHITE, ALIGN_LEFT, "PRACTICE: " GLYPH_SQUARE " CHECKPOINT  " GLYPH_TRIANGLE " REMOVE");
+    font_draw(80, 368, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "STATS");
     snprintf(buf, sizeof(buf), "ATTEMPTS %u  JUMPS %u", (unsigned)g->save.total_attempts, (unsigned)g->save.total_jumps);
-    font_draw(80, 382, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(80, 388, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     snprintf(buf, sizeof(buf), "LEVELS %d/%d  COINS %d", done, g_level_count, coins);
-    font_draw(80, 400, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(80, 406, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
 }
 
 void menus_tick(void)
@@ -599,5 +681,5 @@ void menus_render(void)
     case SCR_GARAGE: garage_render(); break;
     case SCR_OPTIONS: options_render(); break;
     }
-    fx_draw(FX_SCREEN, 0, 0);
+    fx_draw(FX_SCREEN, 0, 0, (1.0f - g_game.alpha) * TICK_DT);
 }

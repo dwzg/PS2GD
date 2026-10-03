@@ -1,3 +1,4 @@
+# Adapted from Play!'s tools/AutoTest/CMakeLists.txt (BSD license, see LICENSE).
 cmake_minimum_required(VERSION 3.18)
 
 set(CMAKE_MODULE_PATH

@@ -275,9 +275,9 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
             }
         }
     }
-    /* block edges */
+    /* block edges (they light up on the beat) */
     const float ew = 2.5f;
-    Color ec = pal->block_edge;
+    Color ec = col_lerp(pal->block_edge, COL_WHITE, 0.45f * v->pulse);
     for (int cy = r0; cy < r1; cy++) {
         for (int cx = c0; cx < c1; cx++) {
             int t = L->grid[cy * L->width + cx];
@@ -308,12 +308,12 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
             int back = (t >= OBJ_PORTAL_CUBE && t <= OBJ_SPEED_3) || (t >= OBJ_PAD_YELLOW && t <= OBJ_PAD_BLUE);
             if ((pass == 0) != back) continue;
             switch (t) {
-            case OBJ_SPIKE_UP: render_spike(sx, sb, B, B * 0.92f, 0, spike_fill, pal->block_edge); break;
-            case OBJ_SPIKE_DOWN: render_spike(sx, sb - B, B, B * 0.92f, 1, spike_fill, pal->block_edge); break;
-            case OBJ_SPIKE_SM_UP: render_spike(sx + B * 0.1f, sb, B * 0.8f, B * 0.42f, 0, spike_fill, pal->block_edge); break;
-            case OBJ_SPIKE_SM_DOWN: render_spike(sx + B * 0.1f, sb - B, B * 0.8f, B * 0.42f, 1, spike_fill, pal->block_edge); break;
-            case OBJ_SAW_BIG: render_saw(mx, my, B * 0.98f, v->time * 5.0f, spike_fill, pal->block_edge); break;
-            case OBJ_SAW_SMALL: render_saw(mx, my, B * 0.5f, -v->time * 7.0f, spike_fill, pal->block_edge); break;
+            case OBJ_SPIKE_UP: render_spike(sx, sb, B, B * 0.92f, 0, spike_fill, ec); break;
+            case OBJ_SPIKE_DOWN: render_spike(sx, sb - B, B, B * 0.92f, 1, spike_fill, ec); break;
+            case OBJ_SPIKE_SM_UP: render_spike(sx + B * 0.1f, sb, B * 0.8f, B * 0.42f, 0, spike_fill, ec); break;
+            case OBJ_SPIKE_SM_DOWN: render_spike(sx + B * 0.1f, sb - B, B * 0.8f, B * 0.42f, 1, spike_fill, ec); break;
+            case OBJ_SAW_BIG: render_saw(mx, my, B * 0.98f, v->time * 5.0f, spike_fill, ec); break;
+            case OBJ_SAW_SMALL: render_saw(mx, my, B * 0.5f, -v->time * 7.0f, spike_fill, ec); break;
             case OBJ_ORB_YELLOW: case OBJ_ORB_PINK: case OBJ_ORB_BLUE: case OBJ_ORB_GREEN: {
                 float a = is_used(p, o->id) ? 0.45f : 1.0f;
                 render_orb(mx, my, B * 0.30f, col_with_alpha(orb_color(t), a), v->time, v->pulse);

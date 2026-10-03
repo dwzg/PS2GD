@@ -46,6 +46,12 @@ int gfx_ps2_is_pal(void)
     return s_gs && s_gs->Mode == GS_MODE_PAL;
 }
 
+float gfx_ps2_refresh_hz(void)
+{
+    /* interlaced field rates */
+    return gfx_ps2_is_pal() ? 50.0f : 60000.0f / 1001.0f;
+}
+
 void gfx_ps2_begin(void)
 {
     s_blend = -1;
@@ -53,10 +59,20 @@ void gfx_ps2_begin(void)
     gsKit_clear(s_gs, GS_SETREG_RGBAQ(0, 0, 0, 0x80, 0));
 }
 
-void gfx_ps2_end(void)
+void gfx_ps2_submit(void)
 {
+    /* starts the DMA; the GS draws while the EE goes on */
     gsKit_queue_exec(s_gs);
-    gsKit_sync_flip(s_gs);
+}
+
+void gfx_ps2_flip(void)
+{
+    /* gsKit_sync_flip() without its busy-wait for the vblank: the caller has
+     * already slept until one started */
+    gsKit_finish();
+    GS_SET_DISPFB2(s_gs->ScreenBuffer[s_gs->ActiveBuffer & 1] / 8192, s_gs->Width / 64, s_gs->PSM, 0, 0);
+    s_gs->ActiveBuffer ^= 1;
+    gsKit_setactive(s_gs);
 }
 
 void gfx_blend(int mode)

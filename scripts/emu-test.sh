@@ -7,6 +7,14 @@
 #   PD_SHOTS=150,400 scripts/emu-test.sh 10    # also save shot_<frame>.ppm
 #
 # The default script goes title -> level select -> level 1.
+#
+# To play a level with on-beat input, use a perf build (it prints PD_MARK when
+# an attempt starts) and append the rhythm check's presses:
+#   scripts/build-ps2.sh PERF=1
+#   ELF=$PWD/build/ps2-perf/pulsedash.elf scripts/emu-test.sh 85 \
+#       "200:CROSS:6,330:CROSS:6,$(build/host/pd_tool script 0)"
+# (cube, ball and UFO parts replay reliably; ship and wave need frame-exact
+# holds, so an open-loop replay may drift there)
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${PLAY_DIR:-$ROOT/build/play}

@@ -68,7 +68,7 @@ void fx_update(float dt)
     }
 }
 
-void fx_draw(int space, float cam_x, float cam_y)
+void fx_draw(int space, float cam_x, float cam_y, float back)
 {
     int blend = -1;
     for (int i = 0; i < MAX_PARTICLES; i++) {
@@ -76,14 +76,15 @@ void fx_draw(int space, float cam_x, float cam_y)
         if (!p->active || p->space != space) continue;
         float t = 1.0f - p->life / p->max_life;
         float size = lerpf(p->size, p->size_end, t);
+        float px = p->x - p->vx * back, py = p->y - p->vy * back;
         float sx, sy;
         if (space == FX_WORLD) {
-            sx = (p->x - cam_x) * BLOCK_PX;
-            sy = SCREEN_H - (p->y - cam_y) * BLOCK_PX;
+            sx = (px - cam_x) * BLOCK_PX;
+            sy = SCREEN_H - (py - cam_y) * BLOCK_PX;
             size *= BLOCK_PX;
         } else {
-            sx = p->x;
-            sy = p->y;
+            sx = px;
+            sy = py;
         }
         if (sx < -60 || sx > SCREEN_W + 60 || sy < -60 || sy > SCREEN_H + 60) continue;
         if (blend != p->add) {

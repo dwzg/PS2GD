@@ -15,7 +15,6 @@
 #include <math.h>
 
 #define GAME_TITLE "PULSE DASH"
-#define GAME_VERSION "1.0"
 
 #define SCREEN_W 640
 #define SCREEN_H 448
