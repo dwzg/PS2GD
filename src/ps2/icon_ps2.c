@@ -2,6 +2,8 @@
  * Generates the memory card browser icon: a textured cube wearing the
  * default "CORE" face. Format: PS2 icon (.ico/.icn) with one shape, one
  * static animation frame and an uncompressed 128x128 A1B5G5R5 texture.
+ * Layout checked against the icon parsers in Play! (saves/Icon.cpp) and
+ * ps2iconsys (ps2_ps2icon.hpp).
  */
 #include <string.h>
 
@@ -83,18 +85,16 @@ int icon_ps2_build(uint8_t *buf, int cap)
         }
     }
 
-    /* animation: one frame, one key */
-    put_u32(0x01);
-    put_u32(1);
-    put_f32(1.0f);
-    put_u32(0);
-    put_u32(1);
-    put_u32(0); /* shape id */
-    put_u32(1); /* key count */
-    put_u32(1);
-    put_u32(0);
-    put_f32(1.0f);
-    put_f32(1.0f);
+    /* animation header + one static frame (same defaults as ps2iconsys) */
+    put_u32(0x01); /* id */
+    put_u32(31);   /* frame length */
+    put_f32(1.0f); /* speed */
+    put_u32(0);    /* play offset */
+    put_u32(1);    /* frames */
+    put_u32(0);    /* frame 0: shape id */
+    put_u32(1);    /*          key count */
+    put_f32(0.0f); /*          key time */
+    put_f32(1.0f); /*          key value */
 
     for (int y = 0; y < 128; y++)
         for (int x = 0; x < 128; x++) {
