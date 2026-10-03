@@ -7,7 +7,7 @@
  *   pd_tool shot <level> <sec> <out.bmp> [practice]
  *                                       screenshot of the level at time sec,
  *                                       played by the solver
- *   pd_tool menu <title|select|garage|options> <out.bmp>
+ *   pd_tool menu <title|select|garage|options|delay> <out.bmp>
  *   pd_tool overview <level> <out.bmp>  whole-level map with the solver path
  *   pd_tool wav <song> <seconds> <out.wav>
  *   pd_tool smoke                       drive the full game through menus and a
@@ -422,7 +422,7 @@ static int cmd_menu(const char *which, const char *out)
     int scr = SCR_TITLE;
     if (!strcmp(which, "select")) scr = SCR_SELECT;
     else if (!strcmp(which, "garage")) scr = SCR_GARAGE;
-    else if (!strcmp(which, "options")) scr = SCR_OPTIONS;
+    else if (!strcmp(which, "options") || !strcmp(which, "delay")) scr = SCR_OPTIONS;
     g_game.screen = scr;
     g_game.fade = 0.0f;
     g_game.fading = 0;
@@ -434,6 +434,15 @@ static int cmd_menu(const char *which, const char *out)
     if (scr == SCR_SELECT) {
         tick_with_audio(BTN_RIGHT);
         for (int t = 0; t < 40; t++) tick_with_audio(0);
+    }
+    if (!strcmp(which, "delay")) {
+        /* audio delay selected, metronome running, set to +30 ms */
+        g_game.options_sel = 2;
+        for (int k = 0; k < 3; k++) {
+            tick_with_audio(BTN_RIGHT);
+            tick_with_audio(0);
+        }
+        for (int t = 0; t < 61; t++) tick_with_audio(0);
     }
     render_frame(out);
     return 0;

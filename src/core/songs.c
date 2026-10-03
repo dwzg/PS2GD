@@ -86,6 +86,21 @@ static const SongDef SONG_PRACTICE_DEF = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Metronome for setting the audio delay: a kick on every beat         */
+/* ------------------------------------------------------------------ */
+static const PatternDef P_METRO[] = {
+    {"click", "C6:2 -:2 G5:2 -:2 G5:2 -:2 G5:2 -:2"}, /* high on each bar's first beat */
+    {"pad", "C4+E4+G4:16 A3+C4+E4:16"},
+    {NULL, NULL},
+};
+static const SongDef SONG_METRO_DEF = {
+    "Metronome", 120.0f, 0, P_METRO,
+    {"k4*2", NULL, "hoff*2", NULL, "pad", "click*2", NULL, NULL},
+    {0, 0, 0, 0, INS_PAD_SOFT, INS_PLUCK, 0, 0},
+    {1.0f, 0.0f, 0.5f, 0.0f, 0.6f, 0.8f, 0.0f, 0.0f},
+};
+
+/* ------------------------------------------------------------------ */
 /* Level 1: "Neon Steps" (A minor, 126 BPM)                            */
 /* ------------------------------------------------------------------ */
 static const PatternDef P_NEON[] = {
@@ -350,7 +365,7 @@ static const SongDef SONG_PRISM = {
 };
 
 const SongDef *const g_songs[] = {
-    &SONG_MENU_DEF, &SONG_PRACTICE_DEF, &SONG_NEON, &SONG_SKY, &SONG_GARDEN,
+    &SONG_MENU_DEF, &SONG_PRACTICE_DEF, &SONG_METRO_DEF, &SONG_NEON, &SONG_SKY, &SONG_GARDEN,
     &SONG_SAUCER, &SONG_WAVE, &SONG_PRISM,
 };
 const int g_song_count = (int)(sizeof(g_songs) / sizeof(g_songs[0]));

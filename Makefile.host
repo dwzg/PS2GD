@@ -5,6 +5,7 @@
 #   make -f Makefile.host test-full  -> also prove levels beatable at 30 and 20 Hz input
 
 CC ?= cc
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 SDL_CFLAGS := $(shell sdl2-config --cflags)
 SDL_LIBS := $(shell sdl2-config --libs)
 CFLAGS ?= -O2 -g
@@ -27,6 +28,11 @@ $(OUT)/pd_tool: $(CORE_OBJ) $(TOOL_OBJ)
 
 $(OUT)/host/%.o: CFLAGS += -Wno-double-promotion
 
+# the version is compiled into one small object, rebuilt every time
+$(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
+$(OUT)/core/version.o: FORCE
+FORCE:
+
 $(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -44,4 +50,4 @@ test-full: test
 clean:
 	rm -rf $(OUT)
 
-.PHONY: all test test-full clean
+.PHONY: all test test-full clean FORCE

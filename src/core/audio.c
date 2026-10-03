@@ -118,7 +118,8 @@ static int s_seq_idx;
 static float s_step_samples;
 static float s_sc_t = 10.0f; /* time since last kick (sidechain) */
 static float s_music_gain = 0.64f, s_sfx_gain = 0.64f;
-static float s_latency; /* seconds between mixing and hearing (frontend) */
+static float s_latency;    /* seconds between mixing and hearing (frontend) */
+static float s_user_delay; /* the player's extra delay setting */
 static float s_track_vol[SONG_TRACKS];
 static int s_track_inst[SONG_TRACKS];
 static int s_delay_samples = 12000;
@@ -1007,10 +1008,22 @@ void audio_set_latency(float sec)
     s_latency = sec > 0.0f ? sec : 0.0f;
 }
 
+void audio_set_user_delay(float sec)
+{
+    s_user_delay = sec;
+}
+
+/* Seconds from mixing a sample to hearing it. */
+static float heard_delay(void)
+{
+    return s_latency + s_user_delay;
+}
+
 void audio_play_song(int song, float start_sec)
 {
-    /* what gets mixed now is heard s_latency later */
-    Cmd c = {CMD_PLAY, song, 0, (start_sec + s_latency) * SRF, next_gen()};
+    /* what gets mixed now is heard heard_delay() later (a negative start
+     * just holds the song back) */
+    Cmd c = {CMD_PLAY, song, 0, (start_sec + heard_delay()) * SRF, next_gen()};
     m_song = song;
     push_cmd(c);
 }
@@ -1049,7 +1062,7 @@ float audio_song_time(void)
 {
     if (m_song < 0) return 0.0f;
     if (s_pub_gen != m_gen) return 0.0f;
-    return s_pub_elapsed / SRF - s_latency;
+    return s_pub_elapsed / SRF - heard_delay();
 }
 
 float audio_song_beat(void)

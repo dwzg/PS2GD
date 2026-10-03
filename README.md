@@ -20,7 +20,10 @@ affiliated with RobTop Games; "Geometry Dash" is their trademark.
   Wave Rider, Prism Overdrive.
 - **Every jump is on the beat**: each level is checked to be beatable when
   every tap lands on an 8th note of its song, and blocks, spikes, orbs and
-  pads pulse with the music.
+  pads pulse with the music. If the sound arrives late or early on your TV
+  (soundbars and AV receivers add delay), set **Options > Audio delay**: a
+  metronome plays and four lights flash with the beat; move the value until
+  the flashes land on the kick.
 - **5 vehicles**: cube, ship, ball, UFO and wave, plus gravity flips and four
   speeds.
 - Yellow/pink/blue/green **orbs**, yellow/pink/blue **pads**, spikes, saws.
@@ -50,8 +53,11 @@ affiliated with RobTop Games; "Geometry Dash" is their trademark.
 
 ## Running it
 
-**On a PS2:** copy `pulsedash-packed.elf` to a USB stick and launch it with
-wLaunchELF/uLaunchELF (for example from FreeMcBoot), or from OPL's apps list.
+**On a PS2:** download `pulsedash-packed.elf` from the latest
+[release](../../releases/latest) (or build it, below), copy it to a USB
+stick and launch it with wLaunchELF/uLaunchELF (for example from
+FreeMcBoot), or from OPL's apps list. The version is shown in the corner of
+the title screen.
 Any controller in port 1 or 2 works; progress is saved to the memory card
 in slot 1 (or slot 2).
 
@@ -74,6 +80,9 @@ scripts/build-ps2.sh          # -> build/ps2/pulsedash.elf and pulsedash-packed.
 or with a local [ps2dev](https://github.com/ps2dev/ps2dev) install
 (`PS2DEV`, `PS2SDK`, `GSKIT` set): `make`.
 
+Builds show `git describe` on the title screen (the tag for a release, else
+the commit); `make VERSION=...` overrides it.
+
 PC version and developer tools (needs SDL2):
 
 ```sh
@@ -83,6 +92,20 @@ build/host/pulsedash
 
 GitHub Actions builds the ELF (uploaded as an artifact) and runs the tests
 on every push.
+
+### Releases
+
+Push a version tag and CI publishes a GitHub release once the tests and the
+PS2 build pass:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The release carries `pulsedash-packed.elf`, `pulsedash.elf`, a zip with both
+and the README, and `SHA256SUMS`, with notes generated from the merged pull
+requests. Tags with a hyphen (`v1.1.0-rc1`) become pre-releases.
 
 ## Testing
 

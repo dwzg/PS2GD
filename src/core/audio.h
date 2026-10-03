@@ -25,8 +25,9 @@ enum {
     SFX_COUNT
 };
 
-/* Song ids: 0 = menu loop, 1 = practice loop, 2.. = level tracks. */
-enum { SONG_MENU = 0, SONG_PRACTICE = 1, SONG_FIRST_LEVEL = 2 };
+/* Song ids: menu loop, practice loop, the metronome used to set the audio
+ * delay, then the level tracks. */
+enum { SONG_MENU = 0, SONG_PRACTICE = 1, SONG_METRONOME = 2, SONG_FIRST_LEVEL = 3 };
 
 void audio_init(void);
 
@@ -36,6 +37,9 @@ void audio_mix(int16_t *out, int frames);
 /* Output latency of the frontend (time from audio_mix() to the speaker).
  * Songs start this far in, so what is heard lines up with game time. */
 void audio_set_latency(float sec);
+/* Extra delay the player sets in the options for their TV or speakers
+ * (added to the frontend latency; may be negative). */
+void audio_set_user_delay(float sec);
 
 /* Start a song so that `start_sec` into it is heard right now. */
 void audio_play_song(int song, float start_sec);
