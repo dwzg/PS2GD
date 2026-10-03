@@ -93,13 +93,8 @@ typedef struct {
     float erase_t;
     int start_practice;
 
-    /* title animation */
-    float title_x, title_y, title_vy, title_rot;
-    float title_prev_y, title_prev_rot;
-    int title_pal;
-    float title_pal_t;
-
     PlayState play;
+    PlayState demo; /* the run behind the title screen */
 } Game;
 
 extern Game g_game;
@@ -113,6 +108,25 @@ void play_tick(void);
 void play_render(void);
 void play_exit(void);
 unsigned play_attempts_started(void);
+
+/* gameplay pieces reused by the title screen's demo run */
+void play_begin_tick(PlayState *ps); /* before moving the player: keep the previous state for interpolation */
+void play_end_tick(PlayState *ps);   /* after: effects, rotation, camera */
+void play_place(PlayState *ps);      /* the player was put somewhere new: reset camera and effects */
+void play_view(const PlayState *ps, View *v);
+void play_draw_player(const PlayState *ps, const View *v);
+
+/* the title screen's demo run (demo.c): a loop of DEMO_LOOP columns, 8 bars
+ * of the menu song at normal speed; at x = DEMO_WRAP the run moves back by
+ * DEMO_LOOP, onto the same view */
+#define DEMO_LOOP 180
+#define DEMO_TAIL 24 /* the loop's first columns, repeated after it */
+#define DEMO_WRAP (DEMO_LOOP + 8.0f)
+const char *const *demo_level_src(void);
+/* beat: the menu song's beat as heard, or NULL if unknown; returns 1 if the run died */
+int demo_tick(PlayState *ps, const float *beat);
+void demo_render(const PlayState *ps, const Palette *pal);
+void demo_free(PlayState *ps);
 
 /* shared drawing used by menus */
 void draw_menu_backdrop(const Palette *pal, float scroll, float pulse);

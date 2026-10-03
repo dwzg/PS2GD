@@ -7,7 +7,8 @@
  *   pd_tool shot <level> <sec> <out.bmp> [practice]
  *                                       screenshot of the level at time sec,
  *                                       played by the solver
- *   pd_tool menu <title|select|garage|options|delay> <out.bmp>
+ *   pd_tool menu <title|select|garage|options|delay> <out.bmp> [sec]
+ *                                       a menu screen, sec seconds after it opened
  *   pd_tool overview <level> <out.bmp>  whole-level map with the solver path
  *   pd_tool wav <song> <seconds> <out.wav>
  *   pd_tool smoke                       drive the full game through menus and a
@@ -17,7 +18,7 @@
  *                                       song, tol ticks early or late (default 2),
  *                                       tapping orbs rather than holding into them?
  *                                       (with x: only check up to that x)
-*   pd_tool trace <lvl> x0 x1 [off]     player state along the solver's path (with
+ *   pd_tool trace <lvl> x0 x1 [off]     player state along the solver's path (with
  *                                       off: the rhythm check's run at that offset)
  *   pd_tool orbs <lvl> [min]            how forgiving each orb is: the ticks at which
  *                                       a quick tap (4 ticks) on it still works, in
@@ -30,6 +31,10 @@
  *   pd_tool palettes <out.bmp> [min]    every palette drawing the same small scene,
  *                                       and the luminance contrast of obstacles
  *                                       against the background (fails below min)
+ *   pd_tool demo [gen]                  check the title screen's demo run: it plays
+ *                                       on the beat for several loops from any
+ *                                       point of the menu song (gen: print its
+ *                                       press table from the rhythm solver)
  *   pd_tool prof <lvl>                  play a level along the solver's path,
  *                                       rendering every tick into a null backend;
  *                                       prints primitives per frame (run it under
@@ -80,18 +85,28 @@ const char *plat_name(void) { return "TOOL"; }
  * Level sources: the built-in levels, plus one loaded from a text file (one
  * source line per line, a blank line between sections) when a command is
  * given a path instead of a level number. Used by tools that edit levels.
+ * "demo" names the title screen's demo level, which plays to the menu song.
  */
 #define FILE_LEVEL 1000
+#define DEMO_LEVEL 1001
 static const char **s_file_src;
+static int s_song_override = -1;
 
 static const char *const *level_src(int idx)
 {
+    if (idx == DEMO_LEVEL) return demo_level_src();
     return idx == FILE_LEVEL ? (const char *const *)s_file_src : g_levels[idx].src;
+}
+
+/* The song a level plays to. */
+static int level_song(const Level *L)
+{
+    return s_song_override >= 0 ? s_song_override : SONG_FIRST_LEVEL + L->song;
 }
 
 static void tool_level_info(int idx, LevelInfo *info)
 {
-    if (idx != FILE_LEVEL) {
+    if (idx < FILE_LEVEL) {
         level_info(idx, info);
         return;
     }
@@ -223,7 +238,7 @@ static int input_allowed(int t, const Player *p, int prev, int held)
 /* Marks the ticks of every 8th note of the level's song, shifted by offset. */
 static void rhythm_grid(const Level *L, int offset)
 {
-    float step = 1800.0f / audio_song_bpm(SONG_FIRST_LEVEL + L->song); /* ticks per 8th */
+    float step = 1800.0f / audio_song_bpm(level_song(L)); /* ticks per 8th */
     memset(s_grid, 0, sizeof(s_grid));
     for (int k = 0;; k++) {
         int t = (int)lroundf((float)k * step) + offset;
@@ -435,7 +450,7 @@ static int cmd_shot(int idx, float sec, const char *out, int practice)
     return 0;
 }
 
-static int cmd_menu(const char *which, const char *out)
+static int cmd_menu(const char *which, const char *out, float sec)
 {
     game_init();
     int scr = SCR_TITLE;
@@ -449,7 +464,7 @@ static int cmd_menu(const char *which, const char *out)
     g_game.save.coins[0] = 5;
     g_game.save.best[1] = 47;
     g_game.save.best_practice[1] = 82;
-    for (int t = 0; t < 100; t++) tick_with_audio(0);
+    for (int t = 0; t < (sec > 0.0f ? (int)(sec * TICK_HZ) : 100); t++) tick_with_audio(0);
     if (scr == SCR_SELECT) {
         tick_with_audio(BTN_RIGHT);
         for (int t = 0; t < 40; t++) tick_with_audio(0);
@@ -656,7 +671,7 @@ static int cmd_check(void)
             }
         }
         t += (L->end_x - x) / SIM_SPEEDS[sp];
-        float slen = audio_song_length(SONG_FIRST_LEVEL + L->song);
+        float slen = audio_song_length(level_song(L));
         printf("level %d %-18s %-7s width=%4d height=%2d objs=%4d coins=%d est=%5.1fs song=%5.1fs%s\n", i,
                info.name, difficulty_name(info.difficulty), L->width, L->height, L->nobjs, L->ncoins, t, slen,
                t > slen ? "  (song loops)" : "");
@@ -768,7 +783,7 @@ static int rhythm_level(int idx, int tol)
     tool_level_info(idx, &info);
     int ok = 1;
     printf("level %d \"%s\" (%.0f BPM): presses on 8th notes", idx, info.name,
-           (double)audio_song_bpm(SONG_FIRST_LEVEL + L->song));
+           (double)audio_song_bpm(level_song(L)));
     for (int o = -tol; o <= tol; o += tol > 0 ? tol : 1) {
         float reached;
         rhythm_grid(L, o);
@@ -820,7 +835,7 @@ static int cmd_orbs(int idx, int min_window)
     }
     static uint8_t base[MAX_TICKS], trial[MAX_TICKS];
     memcpy(base, s_sol, sizeof(base));
-    float step = 1800.0f / audio_song_bpm(SONG_FIRST_LEVEL + L->song);
+    float step = 1800.0f / audio_song_bpm(level_song(L));
     Player p;
     sim_reset(&p, L);
     int prev = 0, bad = 0, norbs = 0;
@@ -871,7 +886,7 @@ static int cmd_ruler(int idx)
     /* column the player is in on every 8th note */
     static int8_t mark[4096];
     memset(mark, 0, sizeof(mark));
-    float step = 1800.0f / audio_song_bpm(SONG_FIRST_LEVEL + L->song);
+    float step = 1800.0f / audio_song_bpm(level_song(L));
     Player p;
     sim_reset(&p, L);
     int prev = 0, k = 0;
@@ -1029,6 +1044,197 @@ static int cmd_palettes(const char *out, float min_ratio)
     return bad;
 }
 
+typedef struct {
+    float x0, x1;
+} DemoXPress;
+
+/* Play the demo level with position-keyed presses as the title screen does,
+ * starting `shift` blocks behind x = 0: alive and on the ground, not holding,
+ * at DEMO_WRAP (the state the loop wraps from)? */
+static int demo_run_ok(const Level *L, const DemoXPress *pr, int n, float shift, float x_end)
+{
+    Player p;
+    sim_reset(&p, L);
+    p.x = -shift;
+    float last = p.x;
+    int held = 0;
+    while (!p.dead && p.x < x_end) {
+        int h = 0;
+        for (int i = 0; i < n; i++)
+            if ((p.x >= pr[i].x0 && p.x < pr[i].x1) || (last < pr[i].x0 && p.x >= pr[i].x1)) h = 1;
+        last = p.x;
+        sim_tick(&p, L, h, h && !held);
+        held = h;
+    }
+    if (x_end < DEMO_WRAP) return !p.dead;
+    return !p.dead && p.grounded && !held && fabsf(p.y - 0.5f) < 0.01f;
+}
+
+/* ... from ten sub-tick phases. */
+static int demo_all_phases(const Level *L, const DemoXPress *pr, int n, float x_end)
+{
+    for (int k = 0; k < 10; k++)
+        if (!demo_run_ok(L, pr, n, k * 0.1f * SIM_SPEEDS[1] * TICK_DT, x_end)) return 0;
+    return 1;
+}
+
+/*
+ * The title screen's demo run (src/core/demo.c). gen: solve the demo level
+ * with presses on the menu song's 8th notes and print its press table.
+ * Otherwise check the table as the title screen uses it: running free for
+ * several loops, and following the menu song's clock (published in 1024-
+ * sample chunks, 0.1% faster than the ticks as at 59.94 Hz) from every
+ * point of the loop.
+ */
+static int cmd_demo(int gen)
+{
+    const float speed = SIM_SPEEDS[1], bpm = audio_song_bpm(SONG_MENU);
+    const int loop_ticks = (int)(DEMO_LOOP / (speed * TICK_DT));
+    s_song_override = SONG_MENU;
+    if (gen) {
+        Level *L = level_parse(demo_level_src());
+        rhythm_grid(L, 0);
+        s_rhythm = 1;
+        int t_end = solve(L, 3, 0, NULL);
+        s_rhythm = 0;
+        if (t_end < 0) {
+            printf("demo: no on-beat run\n");
+            level_free(L);
+            return 1;
+        }
+        /* x before each tick of the run: a press over ticks [t0, t1) holds the
+         * button from half a tick before x(t0) to half a tick before x(t1) */
+        static float xs[MAX_TICKS + 1];
+        Player p;
+        sim_reset(&p, L);
+        int prev = 0;
+        for (int t = 0; t < t_end; t++) {
+            xs[t] = p.x;
+            sim_tick(&p, L, s_sol[t], s_sol[t] && !prev);
+            prev = s_sol[t];
+        }
+        xs[t_end] = p.x;
+        const float tick = speed * TICK_DT;
+        static DemoXPress pr[256];
+        int n = 0;
+        for (int t = 0; t < t_end && n < 256;) {
+            if (!s_sol[t]) {
+                t++;
+                continue;
+            }
+            int t0 = t;
+            while (t < t_end && s_sol[t]) t++;
+            if (xs[t0] >= DEMO_WRAP) break;
+            pr[n].x0 = xs[t0] - tick * 0.5f;
+            pr[n].x1 = xs[t] - tick * 0.5f;
+            n++;
+        }
+        /* move each press to the middle of the range of positions that work
+         * from every sub-tick phase (the loop starts at a different one each
+         * time round), at most 2 ticks off the beat */
+        int fragile = 0;
+        for (int i = 0; i < n; i++) {
+            int ok[13];
+            for (int k = -6; k <= 6; k++) {
+                DemoXPress keep = pr[i];
+                pr[i].x0 += k * tick;
+                pr[i].x1 += k * tick;
+                /* judged up to just after the next press, so that later
+                 * presses can't hide how well this one works */
+                ok[k + 6] = demo_all_phases(L, pr, n, i + 1 < n ? pr[i + 1].x0 + 2.0f : DEMO_WRAP);
+                pr[i] = keep;
+            }
+            /* the working range around the solver's choice, or the nearest one */
+            int c = 99;
+            for (int d = 0; d <= 6 && c == 99; d++) {
+                if (ok[6 - d]) c = -d;
+                else if (ok[6 + d]) c = d;
+            }
+            int lo = c, hi = c - 1;
+            if (c != 99) {
+                hi = c;
+                while (lo > -6 && ok[lo - 1 + 6]) lo--;
+                while (hi < 6 && ok[hi + 1 + 6]) hi++;
+            }
+            int k = lo <= hi ? clampi((lo + hi) / 2, -2, 2) : 0;
+            if (lo > hi) fragile++;
+            pr[i].x0 += k * tick;
+            pr[i].x1 += k * tick;
+            fprintf(stderr, "press at x=%.2f: works shifted %+d..%+d ticks, moved %+d\n", (double)pr[i].x0,
+                    lo, hi, k);
+        }
+        printf("static const DemoPress DEMO_PRESSES[] = {\n");
+        for (int i = 0; i < n; i++) printf("    {%.3ff, %.3ff},\n", (double)pr[i].x0, (double)pr[i].x1);
+        printf("};\n");
+        if (fragile || !demo_all_phases(L, pr, n, DEMO_WRAP)) fprintf(stderr, "demo: presses do not work from every phase\n");
+        level_free(L);
+        return fragile > 0;
+    }
+
+    int bad = 0;
+    Level *Lw = level_parse(demo_level_src());
+    if (Lw->width != DEMO_LOOP + DEMO_TAIL) {
+        printf("demo: the level is %d columns, not %d\n", Lw->width - DEMO_TAIL, DEMO_LOOP);
+        bad++;
+    }
+    level_free(Lw);
+    PlayState *ps = (PlayState *)calloc(1, sizeof(PlayState));
+    /* free running */
+    int deaths = 0, wraps = 0;
+    for (int t = 0; t < 5 * loop_ticks; t++) {
+        float x0 = ps->p.x;
+        if (demo_tick(ps, NULL)) {
+            printf("demo: free run died at x=%.2f (loop %d)\n", (double)x0, wraps + 1);
+            deaths++;
+        }
+        wraps += ps->p.x < x0 - DEMO_LOOP * 0.5f;
+    }
+    printf("demo: free run: %d loops, %d deaths\n", wraps, deaths);
+    bad += deaths > 0 || wraps < 4;
+
+    /* following the music from every quarter beat of the loop */
+    int starts = 0, jumps = 0, seeks = 0;
+    float max_err = 0.0f, max_off = 0.0f, sum_off = 0.0f;
+    deaths = 0;
+    for (float b0 = 0.0f; b0 < DEMO_LOOP / (speed * 60.0f / bpm); b0 += 0.25f, starts++) {
+        demo_free(ps);
+        memset(ps, 0, sizeof(*ps));
+        double clock = b0 * 60.0 / bpm;
+        for (int t = 0; t < loop_ticks * 13 / 10; t++) {
+            clock += TICK_DT * 1.001;
+            float beat = (float)(floor(clock * AUDIO_RATE / 1024.0) * 1024.0 / AUDIO_RATE * bpm / 60.0);
+            float x0 = ps->p.x;
+            if (demo_tick(ps, &beat)) {
+                if (deaths < 8) printf("demo: from beat %.2f died at x=%.2f\n", (double)b0, (double)x0);
+                deaths++;
+            }
+            float dx = ps->p.x - x0;
+            if (t > 0 && fabsf(dx) > 1.0f && fabsf(dx + DEMO_LOOP) > 1.0f) seeks++;
+            if (t < 120) continue;
+            /* against the music as heard (not the chunked clock) */
+            float d = (float)fmod(clock * speed, (double)DEMO_LOOP) - ps->p.x;
+            d -= DEMO_LOOP * floorf(d / DEMO_LOOP + 0.5f);
+            max_err = maxf(max_err, fabsf(d));
+            if (ps->p.events & (EV_JUMP | EV_ORB)) {
+                double e8 = clock * bpm / 30.0; /* 8th notes */
+                float off = (float)fabs(e8 - floor(e8 + 0.5)) * 30000.0f / bpm; /* ms */
+                max_off = maxf(max_off, off);
+                if (b0 == 0.0f && off > 50.0f) printf("demo: jump at x=%.1f is %.0f ms off the beat\n", (double)ps->p.x, (double)off);
+                sum_off += off;
+                jumps++;
+            }
+        }
+    }
+    printf("demo: following the music from %d points: %d deaths, %d resyncs, off the music by up to %.0f ms,\n"
+           "      jumps %.0f ms off the 8th notes on average (%.0f ms at most)\n",
+           starts, deaths, seeks, (double)(max_err / speed * 1000.0f), (double)(jumps ? sum_off / jumps : 0.0f),
+           (double)max_off);
+    bad += deaths > 0 || seeks > 0 || max_err / speed > 0.04f;
+    demo_free(ps);
+    free(ps);
+    return bad;
+}
+
 static int cmd_prof(int idx)
 {
     if (get_solution(idx) < 0) printf("warning: no solution, playing with no input\n");
@@ -1065,6 +1271,10 @@ static int cmd_prof(int idx)
 static int level_arg(const char *s)
 {
     if (strchr(s, '/') || strchr(s, '.')) return s_file_src ? FILE_LEVEL : load_level_file(s);
+    if (!strcmp(s, "demo")) {
+        s_song_override = SONG_MENU;
+        return DEMO_LEVEL;
+    }
     int i = atoi(s);
     if (i < 0 || i >= g_level_count) {
         fprintf(stderr, "bad level %s\n", s);
@@ -1111,7 +1321,7 @@ int main(int argc, char **argv)
     }
     if (!strcmp(cmd, "menu") && argc >= 4) {
         offscreen_init(1280, 896);
-        return cmd_menu(argv[2], argv[3]);
+        return cmd_menu(argv[2], argv[3], argc > 4 ? (float)atof(argv[4]) : 0.0f);
     }
     if (!strcmp(cmd, "overview") && argc >= 4) return cmd_overview(level_arg(argv[2]), argv[3]);
     if (!strcmp(cmd, "wav") && argc >= 5) return cmd_wav(atoi(argv[2]), (float)atof(argv[3]), argv[4]);
@@ -1119,6 +1329,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "prof") && argc >= 3) return cmd_prof(level_arg(argv[2]));
     if (!strcmp(cmd, "ruler") && argc >= 3) return cmd_ruler(level_arg(argv[2]));
     if (!strcmp(cmd, "palettes") && argc >= 3) return cmd_palettes(argv[2], argc > 3 ? (float)atof(argv[3]) : 0.0f) ? 1 : 0;
+    if (!strcmp(cmd, "demo")) return cmd_demo(argc > 2 && !strcmp(argv[2], "gen")) ? 1 : 0;
     if (!strcmp(cmd, "orbs") && argc >= 3) {
         int min = argc > 3 ? atoi(argv[3]) : 0, bad = 0;
         if (strcmp(argv[2], "all")) bad += cmd_orbs(level_arg(argv[2]), min);

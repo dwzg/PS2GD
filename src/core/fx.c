@@ -24,6 +24,12 @@ void fx_clear_space(int space)
         if (s_p[i].space == space) s_p[i].active = 0;
 }
 
+void fx_shift(int space, float dx)
+{
+    for (int i = 0; i < MAX_PARTICLES; i++)
+        if (s_p[i].space == space) s_p[i].x += dx;
+}
+
 Particle *fx_spawn(int space)
 {
     /* Round-robin: when full, the oldest slot gets reused. */

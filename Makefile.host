@@ -1,7 +1,8 @@
 # PC build (SDL2) and developer tool.
 #   make -f Makefile.host            -> build/host/pulsedash, build/host/pd_tool
 #   make -f Makefile.host test       -> data checks, smoke test, every level solved and
-#                                       playable on the beat, coins, palette contrast
+#                                       playable on the beat, coins, palette contrast,
+#                                       the title screen's demo run
 #   make -f Makefile.host test-full  -> also prove levels beatable at 30 and 20 Hz input
 
 CC ?= cc
@@ -44,6 +45,7 @@ test: $(OUT)/pd_tool
 	$(OUT)/pd_tool rhythm all
 	$(OUT)/pd_tool coins all
 	$(OUT)/pd_tool palettes $(OUT)/palettes.bmp 3
+	$(OUT)/pd_tool demo
 
 test-full: test
 	$(OUT)/pd_tool solve all 3

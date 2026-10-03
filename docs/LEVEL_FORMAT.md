@@ -141,6 +141,7 @@ build/host/pd_tool ruler 0          # source with the beat grid
 build/host/pd_tool coins 0          # all coins in one run?
 build/host/pd_tool orbs 0           # how wide is the window to tap each orb?
 build/host/pd_tool palettes out.bmp 3  # every palette, contrast of spikes against the background
+build/host/pd_tool demo             # the title screen's demo loop plays on the beat
 build/host/pd_tool overview 0 out.bmp   # whole-level map with the solver's path
 build/host/pd_tool trace 0 200 260  # player state along the solver's path
 build/host/pd_tool trace 0 200 260 2  # ... along the rhythm check's run (2 ticks late)
@@ -153,4 +154,7 @@ models a human reacting at 20 Hz: a level that passes `solve N 3` has no
 frame-perfect inputs. It also fails a level if the winning run skips a
 portal. Every command that takes a level number also takes the path of a
 text file holding a level (the strings of a level file, one per line), which
-is how `tools/beat_align.py` tests its edits.
+is how `tools/beat_align.py` tests its edits, or `demo` for the title
+screen's demo loop (`src/core/demo.c`, timed to the menu song). That loop is
+played by a table of presses: after changing it, `pd_tool demo gen` prints
+a new table from the rhythm solver, and `pd_tool demo` checks it.

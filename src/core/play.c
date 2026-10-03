@@ -636,20 +636,62 @@ static void draw_results(const PlayState *ps)
     }
 }
 
+static Pose make_pose(const PlayState *ps)
+{
+    const float a = g_game.alpha;
+    Pose pose = {lerpf(ps->prev_x, ps->p.x, a), lerpf(ps->prev_y, ps->p.y, a), lerpf(ps->prev_rot, ps->rot, a),
+                 lerpf(ps->prev_angle, ps->vis_angle, a)};
+    return pose;
+}
+
+/* --- also used by the title screen's demo run (demo.c) -------------- */
+
+void play_view(const PlayState *ps, View *v)
+{
+    const Game *g = &g_game;
+    const float a = g->alpha;
+    float sh = ps->shake * 0.6f;
+    v->cam_x = lerpf(ps->prev_cam_x, ps->cam_x, a) + (sh > 0 ? (hash_f01((uint32_t)(g->t * 977.0f)) - 0.5f) * sh : 0.0f);
+    v->cam_y = lerpf(ps->prev_cam_y, ps->cam_y, a) + (sh > 0 ? (hash_f01((uint32_t)(g->t * 731.0f) + 9u) - 0.5f) * sh : 0.0f);
+    v->time = g->t;
+    v->pulse = beat_pulse();
+    v->pal = &ps->pal;
+}
+
+void play_begin_tick(PlayState *ps)
+{
+    snap_prev(ps);
+}
+
+void play_end_tick(PlayState *ps)
+{
+    update_visuals(ps, TICK_DT);
+    update_camera(ps, TICK_DT);
+}
+
+void play_place(PlayState *ps)
+{
+    reset_visuals(ps);
+    ps->cam_x = ps->p.x - CAM_PLAYER_X;
+    ps->cam_y = ps->cam_target_y = CAM_GROUND_Y;
+    ps->phase = PH_RUN;
+    snap_prev(ps);
+}
+
+void play_draw_player(const PlayState *ps, const View *v)
+{
+    Pose pose = make_pose(ps);
+    draw_player(ps, v, &pose);
+}
+
 void play_render(void)
 {
     const Game *g = &g_game;
     const PlayState *ps = ps_get();
     const float a = g->alpha;
-    Pose pose = {lerpf(ps->prev_x, ps->p.x, a), lerpf(ps->prev_y, ps->p.y, a), lerpf(ps->prev_rot, ps->rot, a),
-                 lerpf(ps->prev_angle, ps->vis_angle, a)};
+    Pose pose = make_pose(ps);
     View v;
-    float sh = ps->shake * 0.6f;
-    v.cam_x = lerpf(ps->prev_cam_x, ps->cam_x, a) + (sh > 0 ? (hash_f01((uint32_t)(g->t * 977.0f)) - 0.5f) * sh : 0.0f);
-    v.cam_y = lerpf(ps->prev_cam_y, ps->cam_y, a) + (sh > 0 ? (hash_f01((uint32_t)(g->t * 731.0f) + 9u) - 0.5f) * sh : 0.0f);
-    v.time = g->t;
-    v.pulse = beat_pulse();
-    v.pal = &ps->pal;
+    play_view(ps, &v);
 
     render_background(&v);
     render_ground(&v, ps->corr_floor, ps->corr_ceil, ps->corr_alpha);

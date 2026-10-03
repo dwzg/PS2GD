@@ -99,7 +99,6 @@ void game_init(void)
     audio_set_user_delay(g->save.audio_delay * 0.01f);
     g->screen = SCR_TITLE;
     g->menu_sel = 1;
-    g->title_y = g->title_prev_y = 0.5f;
     g->alpha = 1.0f;
     g->fade = 1.0f;
     g->fading = -1;
@@ -206,23 +205,23 @@ static Color c2_of(void) { return g_player_colors[g_game.save.col2 % PLAYER_COLO
 
 /* --- title ---------------------------------------------------------- */
 
+/* The menu song's beat as it is heard, or NULL while it isn't playing (with
+ * no audio output its clock stands still). */
+static const float *menu_beat(void)
+{
+    static float last, beat;
+    static int still;
+    float t = audio_song_time();
+    still = t == last ? still + 1 : 0;
+    last = t;
+    beat = audio_song_beat();
+    return audio_current_song() == SONG_MENU && still < 30 ? &beat : NULL;
+}
+
 static void title_tick(void)
 {
     Game *g = &g_game;
-    /* little runner animation */
-    g->title_prev_y = g->title_y;
-    g->title_prev_rot = g->title_rot;
-    g->title_vy -= 95.0f * TICK_DT;
-    g->title_y += g->title_vy * TICK_DT;
-    if (g->title_y <= 0.5f) {
-        g->title_y = 0.5f;
-        g->title_vy = 0.0f;
-        float q = PI * 0.5f;
-        g->title_rot = approachf(g->title_rot, roundf(g->title_rot / q) * q, TICK_DT * 18.0f);
-        if (((int)(g->t * 60.0f) % 50) == 0) g->title_vy = 20.9f;
-    } else {
-        g->title_rot += 7.3f * TICK_DT;
-    }
+    demo_tick(&g->demo, menu_beat());
 
     if (g->repeat & BTN_LEFT) { g->menu_sel = (g->menu_sel + 2) % 3; audio_sfx(SFX_MENU_MOVE); }
     if (g->repeat & BTN_RIGHT) { g->menu_sel = (g->menu_sel + 1) % 3; audio_sfx(SFX_MENU_MOVE); }
@@ -264,26 +263,15 @@ static void title_render(void)
     Game *g = &g_game;
     Palette pal;
     menu_palette(&pal);
-    float scroll = g->t * 6.0f;
     float pulse = beat_pulse();
-    draw_menu_backdrop(&pal, scroll, pulse);
-
-    /* runner */
-    float gy = SCREEN_H - 2.4f * BLOCK_PX;
-    float rx = 110.0f, ry = gy - lerpf(g->title_prev_y, g->title_y, g->alpha) * BLOCK_PX;
-    draw_glow(rx, ry, BLOCK_PX * 1.3f, col_with_alpha(c1_of(), 0.3f));
-    icon_draw_cube(rx, ry, BLOCK_PX, lerpf(g->title_prev_rot, g->title_rot, g->alpha), g->save.icon, c1_of(), c2_of());
-    for (int i = 0; i < 4; i++) {
-        float sx = SCREEN_W - fmodf(g->t * 6.0f * BLOCK_PX + i * 173.0f, SCREEN_W + 80.0f) + 40.0f;
-        if (i & 1) render_spike(sx, gy, BLOCK_PX, BLOCK_PX * 0.92f, 0, RGBA(6, 6, 10, 235), pal.block_edge);
-    }
+    demo_render(&g->demo, &pal);
 
     float bob = sinf(g->t * 2.0f) * 4.0f + pulse * 3.0f;
-    font_draw_fancy(SCREEN_W / 2 + 4, 62 + bob + 5, 9.0f, RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 0), 0.0f,
+    font_draw_fancy(SCREEN_W / 2 + 4, 46 + bob + 5, 9.0f, RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 120), RGBA(0, 0, 0, 0), 0.0f,
                     ALIGN_CENTER, GAME_TITLE);
-    font_draw_fancy(SCREEN_W / 2, 62 + bob, 9.0f, RGB(255, 250, 200), RGB(255, 170, 40), RGB(20, 10, 0), 4.0f,
+    font_draw_fancy(SCREEN_W / 2, 46 + bob, 9.0f, RGB(255, 250, 200), RGB(255, 170, 40), RGB(20, 10, 0), 4.0f,
                     ALIGN_CENTER, GAME_TITLE);
-    font_draw(SCREEN_W / 2, 136 + bob, 2.0f, col_with_alpha(COL_WHITE, 0.85f), ALIGN_CENTER,
+    font_draw(SCREEN_W / 2, 120 + bob, 2.0f, col_with_alpha(COL_WHITE, 0.85f), ALIGN_CENTER,
               "A RHYTHM PLATFORMER FOR PLAYSTATION 2");
 
     static const Color cols[3] = {RGB(60, 190, 255), RGB(70, 220, 90), RGB(255, 150, 50)};
@@ -291,9 +279,9 @@ static void title_render(void)
     for (int i = 0; i < 3; i++) {
         float cx = SCREEN_W / 2 + (i - 1) * 170.0f;
         float size = i == 1 ? 104.0f : 74.0f;
-        draw_button(cx, 232, size, g->menu_sel == i, cols[i], i);
+        draw_button(cx, 200, size, g->menu_sel == i, cols[i], i);
         int sel = g->menu_sel == i;
-        font_draw_fancy(cx, 300, 2.0f, sel ? COL_WHITE : RGB(210, 220, 235), sel ? RGB(255, 240, 160) : RGB(170, 180, 200),
+        font_draw_fancy(cx, 264, 2.0f, sel ? COL_WHITE : RGB(210, 220, 235), sel ? RGB(255, 240, 160) : RGB(170, 180, 200),
                         RGB(0, 0, 0), 2.0f, ALIGN_CENTER, labels[i]);
     }
     font_draw(SCREEN_W / 2, SCREEN_H - 20, 2.0f, col_with_alpha(COL_WHITE, 0.7f + 0.3f * sinf(g->t * 4.0f)),
