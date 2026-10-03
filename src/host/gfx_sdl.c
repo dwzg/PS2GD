@@ -1,5 +1,6 @@
 /* gfx.h backend for the PC build: batches triangles into SDL_RenderGeometry. */
 #include <SDL.h>
+#include <string.h>
 
 #include "gfx_sdl.h"
 #include "../core/gfx.h"
@@ -11,6 +12,7 @@ static float s_sx = 1.0f, s_sy = 1.0f;
 static SDL_Vertex s_v[MAX_VERTS];
 static int s_n;
 static int s_blend = BLEND_ALPHA;
+static GfxStats s_stats;
 
 void gfx_sdl_begin(SDL_Renderer *r, float scale_x, float scale_y)
 {
@@ -19,7 +21,13 @@ void gfx_sdl_begin(SDL_Renderer *r, float scale_x, float scale_y)
     s_sy = scale_y;
     s_n = 0;
     s_blend = BLEND_ALPHA;
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    memset(&s_stats, 0, sizeof(s_stats));
+    if (r) SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+}
+
+const GfxStats *gfx_sdl_stats(void)
+{
+    return &s_stats;
 }
 
 void gfx_sdl_flush(void)
@@ -54,17 +62,19 @@ void gfx_blend(int mode)
     if (mode == s_blend) return;
     gfx_sdl_flush();
     s_blend = mode;
+    s_stats.blend_switches++;
 }
 
 void gfx_tri(float x0, float y0, Color c0, float x1, float y1, Color c1, float x2, float y2, Color c2)
 {
+    s_stats.tris++;
     reserve(3);
     put(x0, y0, c0);
     put(x1, y1, c1);
     put(x2, y2, c2);
 }
 
-void gfx_quad(const float *xy, const Color *c)
+static void quad_impl(const float *xy, const Color *c)
 {
     reserve(6);
     put(xy[0], xy[1], c[0]);
@@ -75,24 +85,33 @@ void gfx_quad(const float *xy, const Color *c)
     put(xy[6], xy[7], c[3]);
 }
 
+void gfx_quad(const float *xy, const Color *c)
+{
+    s_stats.quads++;
+    quad_impl(xy, c);
+}
+
 static void quad4(float x0, float y0, float x1, float y1, Color tl, Color tr, Color br, Color bl)
 {
     float xy[8] = {x0, y0, x1, y0, x1, y1, x0, y1};
     Color c[4] = {tl, tr, br, bl};
-    gfx_quad(xy, c);
+    quad_impl(xy, c);
 }
 
 void gfx_rect(float x0, float y0, float x1, float y1, Color c)
 {
+    s_stats.rects++;
     quad4(x0, y0, x1, y1, c, c, c, c);
 }
 
 void gfx_rect_v(float x0, float y0, float x1, float y1, Color top, Color bottom)
 {
+    s_stats.quads++;
     quad4(x0, y0, x1, y1, top, top, bottom, bottom);
 }
 
 void gfx_rect_h(float x0, float y0, float x1, float y1, Color left, Color right)
 {
+    s_stats.quads++;
     quad4(x0, y0, x1, y1, left, right, right, left);
 }

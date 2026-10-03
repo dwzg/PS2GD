@@ -1,3 +1,4 @@
 build/
 *.sav
 *.o
+__pycache__/

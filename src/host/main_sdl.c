@@ -111,7 +111,11 @@ int main(int argc, char **argv)
     want.samples = 1024;
     want.callback = audio_cb;
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-    if (dev) SDL_PauseAudioDevice(dev, 0);
+    if (dev) {
+        /* one callback buffer queued on average, plus the system mixer */
+        audio_set_latency((float)have.samples / (float)have.freq + 0.02f);
+        SDL_PauseAudioDevice(dev, 0);
+    }
     else fprintf(stderr, "no audio: %s\n", SDL_GetError());
 
     game_init();
@@ -119,7 +123,9 @@ int main(int argc, char **argv)
     SDL_GameController *gc = NULL;
     uint32_t mouse = 0;
     Uint64 freq = SDL_GetPerformanceFrequency(), last = SDL_GetPerformanceCounter();
-    double acc = 0.0;
+    /* The game ticks at 60 Hz; the simulation runs up to one tick ahead of
+     * real time and each frame is drawn interpolated back to real time. */
+    double ahead = 0.0;
     int running = 1;
     while (running) {
         SDL_Event e;
@@ -130,15 +136,15 @@ int main(int argc, char **argv)
             else if (e.type == SDL_MOUSEBUTTONUP) mouse = 0;
         }
         Uint64 now = SDL_GetPerformanceCounter();
-        acc += (double)(now - last) / (double)freq;
+        double real_dt = (double)(now - last) / (double)freq;
         last = now;
-        if (acc > 0.25) acc = 0.25;
+        ahead -= real_dt < 0.25 ? real_dt : 0.25;
         uint32_t held = key_buttons(SDL_GetKeyboardState(NULL)) | pad_buttons(gc) | mouse;
-        while (acc >= 1.0 / TICK_HZ) {
+        while (ahead < 0.0) {
             if (dev) SDL_LockAudioDevice(dev);
             game_tick(held);
             if (dev) SDL_UnlockAudioDevice(dev);
-            acc -= 1.0 / TICK_HZ;
+            ahead += 1.0 / TICK_HZ;
         }
 
         int w, h;
@@ -152,7 +158,7 @@ int main(int argc, char **argv)
                        (int)(SCREEN_W * scale), (int)(SCREEN_H * scale)};
         SDL_RenderSetViewport(ren, &vp);
         gfx_sdl_begin(ren, scale, scale);
-        game_render();
+        game_render((float)(1.0 - ahead * TICK_HZ));
         gfx_sdl_flush();
         SDL_RenderSetViewport(ren, NULL);
         SDL_RenderPresent(ren);

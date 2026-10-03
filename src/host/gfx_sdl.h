@@ -8,4 +8,10 @@ void gfx_sdl_begin(SDL_Renderer *r, float scale_x, float scale_y);
 /* Submit any batched triangles. Call before SDL_RenderPresent / reading pixels. */
 void gfx_sdl_flush(void);
 
+/* Primitive counts since the last gfx_sdl_begin (r may be NULL to only count). */
+typedef struct {
+    int tris, quads, rects, blend_switches;
+} GfxStats;
+const GfxStats *gfx_sdl_stats(void);
+
 #endif

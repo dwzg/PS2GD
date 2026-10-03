@@ -3,7 +3,10 @@
 // which drops this file in place of Play!'s tools/AutoTest/Main.cpp.
 //
 // Usage: autotest <game.elf> <seconds> [script]
-//   script: comma separated "frame:BUTTON:frames" presses, e.g. "300:CROSS:5,420:CROSS:5"
+//   script: comma separated "frame:BUTTON:frames" presses, e.g. "300:CROSS:5,420:CROSS:5".
+//           "+frame:..." counts from the frame where the game first printed a
+//           line starting with PD_MARK (perf builds do at each level attempt),
+//           so a level can be played from `pd_tool script`.
 //   PD_SHOTS=150,300  also render through the OpenGL GS (Mesa, headless EGL)
 //                     and save shot_<frame>.ppm in the working directory.
 // The game's printf output (boot log, periodic status lines) goes to stdout.
@@ -31,6 +34,56 @@ struct Press
 	unsigned frame;
 	PS2::CControllerInfo::BUTTON button;
 	unsigned length;
+	bool relative; // counted from the PD_MARK frame
+};
+
+// The game's stdout. Forwards everything and remembers the frame of the
+// first line starting with PD_MARK.
+class CMarkStream : public Framework::CStream
+{
+public:
+	CMarkStream(std::atomic<unsigned>& frames, std::atomic<int>& mark)
+	    : m_frames(frames)
+	    , m_mark(mark)
+	{
+	}
+	void Seek(int64, Framework::STREAM_SEEK_DIRECTION) override
+	{
+	}
+	uint64 Tell() override
+	{
+		return 0;
+	}
+	uint64 Read(void*, uint64) override
+	{
+		return 0;
+	}
+	bool IsEOF() override
+	{
+		return false;
+	}
+	uint64 Write(const void* data, uint64 size) override
+	{
+		fwrite(data, 1, size, stdout);
+		fflush(stdout);
+		m_line.append(static_cast<const char*>(data), size);
+		size_t nl;
+		while((nl = m_line.find('\n')) != std::string::npos)
+		{
+			if(m_line.compare(0, 7, "PD_MARK") == 0 && m_mark < 0)
+			{
+				m_mark = (int)m_frames.load();
+				printf("harness: PD_MARK at frame %d\n", (int)m_mark);
+			}
+			m_line.erase(0, nl + 1);
+		}
+		return size;
+	}
+
+private:
+	std::atomic<unsigned>& m_frames;
+	std::atomic<int>& m_mark;
+	std::string m_line;
 };
 
 static PS2::CControllerInfo::BUTTON ParseButton(const std::string& n)
@@ -141,8 +194,9 @@ int main(int argc, const char** argv)
 		{
 			unsigned f, l;
 			char name[32];
-			if(sscanf(item.c_str(), "%u:%31[A-Z]:%u", &f, name, &l) == 3)
-				presses.push_back({f, ParseButton(name), l});
+			bool rel = !item.empty() && item[0] == '+';
+			if(sscanf(item.c_str() + (rel ? 1 : 0), "%u:%31[A-Z]:%u", &f, name, &l) == 3)
+				presses.push_back({f, ParseButton(name), l, rel});
 		}
 	}
 	double seconds = atof(argv[2]);
@@ -163,12 +217,13 @@ int main(int argc, const char** argv)
 	auto pad = static_cast<CPH_Generic*>(vm.GetPadHandler());
 
 	std::atomic<unsigned> frames(0);
+	std::atomic<int> mark(-1);
 	auto conn = vm.OnNewFrame.Connect([&]() { frames++; });
 
 	vm.m_ee->m_os->BootFromFile(argv[1]);
 	{
 		auto iopOs = dynamic_cast<CIopBios*>(vm.m_iop->m_bios.get());
-		iopOs->GetIoman()->SetFileStream(Iop::CIoman::FID_STDOUT, new Framework::CStdStream(stdout));
+		iopOs->GetIoman()->SetFileStream(Iop::CIoman::FID_STDOUT, new CMarkStream(frames, mark));
 	}
 	vm.Resume();
 
@@ -188,7 +243,11 @@ int main(int argc, const char** argv)
 		}
 		std::map<int, bool> state;
 		for(const auto& p : presses)
-			state[p.button] = state[p.button] || (f >= p.frame && f < p.frame + p.length);
+		{
+			if(p.relative && mark < 0) continue;
+			unsigned start = p.frame + (p.relative ? (unsigned)mark.load() : 0);
+			state[p.button] = state[p.button] || (f >= start && f < start + p.length);
+		}
 		for(const auto& s : state)
 			pad->SetButtonState(s.first, s.second);
 		std::this_thread::sleep_for(std::chrono::milliseconds(2));

@@ -38,6 +38,9 @@ typedef struct {
     float cam_x, cam_y, cam_target_y;
     float corr_floor, corr_ceil, corr_alpha;
 
+    /* state at the start of the latest tick, for interpolated rendering */
+    float prev_cam_x, prev_cam_y, prev_x, prev_y, prev_rot, prev_angle;
+
     /* visuals */
     float rot;
     float vis_angle;
@@ -77,6 +80,7 @@ typedef struct {
     float rep_t[4]; /* autorepeat timers for up/down/left/right */
     uint32_t repeat; /* pressed + autorepeat for directions */
     float t;
+    float alpha; /* render interpolation factor, see game_render() */
     SaveData save;
     int save_dirty;
 
@@ -91,6 +95,7 @@ typedef struct {
 
     /* title animation */
     float title_x, title_y, title_vy, title_rot;
+    float title_prev_y, title_prev_rot;
     int title_pal;
     float title_pal_t;
 
@@ -107,6 +112,7 @@ void play_start(int level_idx, int practice);
 void play_tick(void);
 void play_render(void);
 void play_exit(void);
+unsigned play_attempts_started(void);
 
 /* shared drawing used by menus */
 void draw_menu_backdrop(const Palette *pal, float scroll, float pulse);

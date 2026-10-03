@@ -13,11 +13,23 @@ Game g_game;
 
 float beat_pulse(void)
 {
-    if (audio_current_song() < 0) return 0.0f;
-    float b = audio_song_beat();
+    const Game *g = &g_game;
+    const PlayState *ps = &g->play;
+    int song = audio_current_song();
+    if (song < 0) return 0.0f;
+    float b;
+    if (g->screen == SCR_PLAY && !ps->practice && ps->phase == PH_RUN) {
+        /* the song started with the attempt: the level clock is exact and
+         * smoother than the audio thread's chunked position */
+        float t = ps->attempt_time - (1.0f - g->alpha) * TICK_DT;
+        b = t * audio_song_bpm(song) / 60.0f;
+    } else {
+        b = audio_song_beat();
+    }
     if (b < 0.0f) return 0.0f;
     float f = b - floorf(b);
-    return expf(-f * 5.0f);
+    float accent = ((int)b % 4) == 0 ? 1.0f : 0.65f; /* stronger on each bar's downbeat */
+    return accent * expf(-f * 5.0f);
 }
 
 static void on_enter(int scr)
@@ -69,6 +81,11 @@ void game_status(char *buf, int cap)
                  g->sel_level, audio_current_song());
 }
 
+unsigned game_attempts_started(void)
+{
+    return play_attempts_started();
+}
+
 void game_init(void)
 {
     Game *g = &g_game;
@@ -80,7 +97,8 @@ void game_init(void)
     audio_set_volume(g->save.music_vol, g->save.sfx_vol);
     g->screen = SCR_TITLE;
     g->menu_sel = 1;
-    g->title_y = 0.5f;
+    g->title_y = g->title_prev_y = 0.5f;
+    g->alpha = 1.0f;
     g->fade = 1.0f;
     g->fading = -1;
     on_enter(SCR_TITLE);
@@ -139,13 +157,20 @@ void game_tick(uint32_t held)
     fx_update(TICK_DT);
 }
 
-void game_render(void)
+void game_render(float alpha)
 {
     Game *g = &g_game;
+    /* Everything drawn below reads g->t for its animations; let it see the
+     * interpolated time so they advance as evenly as the scrolling. */
+    float tick_t = g->t;
+    /* while fading out the screen is frozen (nothing ticks): no blending */
+    g->alpha = g->fading > 0 ? 1.0f : clampf(alpha, 0.0f, 1.0f);
+    g->t -= (1.0f - g->alpha) * TICK_DT;
     gfx_blend(BLEND_ALPHA);
     if (g->screen == SCR_PLAY) play_render();
     else menus_render();
     if (g->fade > 0.0f) gfx_rect(0, 0, SCREEN_W, SCREEN_H, col_with_alpha(COL_BLACK, g->fade));
+    g->t = tick_t;
 }
 
 /* ------------------------------------------------------------------ */
@@ -183,6 +208,8 @@ static void title_tick(void)
 {
     Game *g = &g_game;
     /* little runner animation */
+    g->title_prev_y = g->title_y;
+    g->title_prev_rot = g->title_rot;
     g->title_vy -= 95.0f * TICK_DT;
     g->title_y += g->title_vy * TICK_DT;
     if (g->title_y <= 0.5f) {
@@ -241,9 +268,9 @@ static void title_render(void)
 
     /* runner */
     float gy = SCREEN_H - 2.4f * BLOCK_PX;
-    float rx = 110.0f, ry = gy - g->title_y * BLOCK_PX;
+    float rx = 110.0f, ry = gy - lerpf(g->title_prev_y, g->title_y, g->alpha) * BLOCK_PX;
     draw_glow(rx, ry, BLOCK_PX * 1.3f, col_with_alpha(c1_of(), 0.3f));
-    icon_draw_cube(rx, ry, BLOCK_PX, g->title_rot, g->save.icon, c1_of(), c2_of());
+    icon_draw_cube(rx, ry, BLOCK_PX, lerpf(g->title_prev_rot, g->title_rot, g->alpha), g->save.icon, c1_of(), c2_of());
     for (int i = 0; i < 4; i++) {
         float sx = SCREEN_W - fmodf(g->t * 6.0f * BLOCK_PX + i * 173.0f, SCREEN_W + 80.0f) + 40.0f;
         if (i & 1) render_spike(sx, gy, BLOCK_PX, BLOCK_PX * 0.92f, 0, RGBA(6, 6, 10, 235), pal.block_edge);
@@ -599,5 +626,5 @@ void menus_render(void)
     case SCR_GARAGE: garage_render(); break;
     case SCR_OPTIONS: options_render(); break;
     }
-    fx_draw(FX_SCREEN, 0, 0);
+    fx_draw(FX_SCREEN, 0, 0, (1.0f - g_game.alpha) * TICK_DT);
 }

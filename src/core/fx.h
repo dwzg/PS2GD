@@ -21,8 +21,12 @@ void fx_clear(void);
 void fx_clear_space(int space);
 Particle *fx_spawn(int space);
 void fx_update(float dt);
-/* World particles are drawn with the camera transform (blocks -> pixels). */
-void fx_draw(int space, float cam_x, float cam_y);
+/*
+ * World particles are drawn with the camera transform (blocks -> pixels).
+ * `back` rewinds each particle along its velocity by that many seconds
+ * (render interpolation between ticks).
+ */
+void fx_draw(int space, float cam_x, float cam_y, float back);
 
 /* Common bursts */
 void fx_burst(int space, float x, float y, int n, float speed, float size, float life, Color c, int add);

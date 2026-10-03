@@ -11,6 +11,7 @@ const PatternDef g_common_patterns[] = {
     {"k4", "x...x...x...x..."},
     {"k4f", "x...x...x...x.xx"},
     {"k2", "x.......x......."},
+    {"kint", "x...r...x...r..."},
     {"kchill", "x.......x.....x."},
     {"c24", "....c.......c..."},
     {"s24", "....x.......x..."},
@@ -31,8 +32,11 @@ const PatternDef g_common_patterns[] = {
 };
 
 /* Standard 40-bar level arrangement:
- * intro 4 | verse 8 | build 4 | drop 8 | break 4 | drop 8 | outro 4 */
-#define ARR_KICK ".*4 k4*8 k4*4 k4*8 .*4 k4*8 k4*3 ."
+ * intro 4 | verse 8 | build 4 | drop 8 | break 4 | drop 8 | outro 4
+ * The kick never stops for long (soft in the intro, half time in the
+ * break): every jump in a level falls on the beat, so the beat must be
+ * audible from the first bar. */
+#define ARR_KICK "kint*4 k4*8 k4*4 k4*8 k2*4 k4*8 k4*3 ."
 #define ARR_SNARE ".*4 c24*7 cfill sbuild c24*7 cfill .*2 sbuild2 c24*7 cfill c24*3 ."
 #define ARR_HAT "hoff*4 hoff*8 h8*4 hcrash h16*7 .*2 h8*2 hcrash h16*7 hoff*4"
 #define ARR_BASS ".*4 bassV*2 .*4 bassD*2 .*4 bassD*2 bassV"
@@ -333,7 +337,7 @@ static const PatternDef P_PRISM[] = {
 };
 static const SongDef SONG_PRISM = {
     "Prism Overdrive", 160.0f, 4, P_PRISM,
-    {".*4 k4*8 k4*4 k4*8 .*4 k4*4 k4*8 k4*3 .",
+    {"kint*4 k4*8 k4*4 k4*8 k2*4 k4*4 k4*8 k4*3 .",
      ".*4 c24*7 cfill sbuild c24*7 cfill .*2 sbuild2 sbuild c24*7 cfill c24*3 .",
      "hoff*4 hoff*8 h8*4 hcrash h16*7 .*2 h8*2 h8*4 hcrash h16*7 hoff*4",
      ".*4 bassV*2 .*4 bassD*2 .*4 bassV bassD*2 bassV",

@@ -33,6 +33,11 @@ void audio_init(void);
 /* Render interleaved stereo int16 frames. Called from the audio thread. */
 void audio_mix(int16_t *out, int frames);
 
+/* Output latency of the frontend (time from audio_mix() to the speaker).
+ * Songs start this far in, so what is heard lines up with game time. */
+void audio_set_latency(float sec);
+
+/* Start a song so that `start_sec` into it is heard right now. */
 void audio_play_song(int song, float start_sec);
 void audio_stop_song(void);
 void audio_sfx(int id);
@@ -40,7 +45,7 @@ void audio_set_volume(int music_0_10, int sfx_0_10);
 /* Freeze the music (sound effects keep playing). */
 void audio_pause(int paused);
 
-/* Playback position of the current song in seconds and beats. */
+/* Position of the current song that is being heard, in seconds and beats. */
 float audio_song_time(void);
 float audio_song_beat(void);
 int audio_current_song(void);
