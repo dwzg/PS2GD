@@ -7,7 +7,7 @@
  *   pd_tool shot <level> <sec> <out.bmp> [practice]
  *                                       screenshot of the level at time sec,
  *                                       played by the solver
- *   pd_tool menu <title|select|garage|options|delay> <out.bmp> [sec]
+ *   pd_tool menu <title|select|garage|options|delay|pause> <out.bmp> [sec]
  *                                       a menu screen, sec seconds after it opened
  *   pd_tool overview <level> <out.bmp>  whole-level map with the solver path
  *   pd_tool wav <song> <seconds> <out.wav>
@@ -452,6 +452,20 @@ static int cmd_shot(int idx, float sec, const char *out, int practice)
 
 static int cmd_menu(const char *which, const char *out, float sec)
 {
+    if (!strcmp(which, "pause")) {
+        /* the pause menu, a second into Skyward Pulse on attempt 128 */
+        get_solution(1);
+        game_init();
+        enter_play(1, 0);
+        g_game.play.attempt = 128;
+        g_game.save.best[1] = 47;
+        g_game.save.best_practice[1] = 82;
+        for (int t = 0; t < 60; t++) tick_with_audio(s_sol[g_game.play.p.ticks] ? BTN_CROSS : 0);
+        tick_with_audio(BTN_START);
+        tick_with_audio(0);
+        render_frame(out);
+        return 0;
+    }
     game_init();
     int scr = SCR_TITLE;
     if (!strcmp(which, "select")) scr = SCR_SELECT;
