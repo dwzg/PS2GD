@@ -16,6 +16,9 @@ typedef struct {
 static inline float view_sx(const View *v, float wx) { return (wx - v->cam_x) * BLOCK_PX; }
 static inline float view_sy(const View *v, float wy) { return SCREEN_H - (wy - v->cam_y) * BLOCK_PX; }
 
+/* Body colour of spikes and saws (their outline is the palette's block_edge). */
+#define SPIKE_FILL RGBA(6, 6, 10, 235)
+
 void render_background(const View *v);
 /* Ground band at y=0 plus optional corridor floor/ceiling bands. */
 void render_ground(const View *v, float corr_floor, float corr_ceil, float corr_alpha);

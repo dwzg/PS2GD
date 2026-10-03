@@ -95,13 +95,21 @@ rewarded instead of punished.
   pits under a pad to three spikes. Don't put a pad where a jump lands: hit
   from the air it fires early.
 - An orb is touched for about two blocks: put it where the player will be on
-  the 8th note after a jump (for example jump on `b`, orb at `b+3` in row 3).
+  the 8th note after a jump (for example jump on `b`, orb at `b+3` in row 2).
+  Keep it below the top of the jump: at the apex the player hangs at the
+  orb's edge and the window to tap it shrinks (a row-3 orb there gave
+  Neon Steps a 9-tick window, row 2 gives 14).
 
 `pd_tool rhythm N [tol]` checks it: the level must be beatable when every
 press in the cube, ball and UFO lands on an 8th note, at a fixed `tol` ticks
 early, on time and late (default 2 ticks, about 33 ms; Neon Steps passes
 with 3). Ship and wave are steered by holding, so they are not constrained.
-`make -f Makefile.host test` runs it for every level.
+An orb must fire within 6 ticks of the press that hits it (a player taps
+an orb, they don't hold the button into it). `make -f Makefile.host test`
+runs it for every level.
+
+`pd_tool orbs N [min]` reports, for every orb on the on-beat run, how many
+ticks wide the window to tap it is (fails below `min`).
 
 To retime an existing level without redesigning it, `tools/beat_align.py`
 moves its obstacles onto the beat: wherever the check gets stuck it inserts
@@ -131,6 +139,9 @@ build/host/pd_tool solve 0 3        # beatable? also at 30 and 20 Hz input
 build/host/pd_tool rhythm 0         # beatable pressing on the beat?
 build/host/pd_tool ruler 0          # source with the beat grid
 build/host/pd_tool coins 0          # all coins in one run?
+build/host/pd_tool orbs 0           # how wide is the window to tap each orb?
+build/host/pd_tool palettes out.bmp 3  # every palette, contrast of spikes against the background
+build/host/pd_tool demo             # the title screen's demo loop plays on the beat
 build/host/pd_tool overview 0 out.bmp   # whole-level map with the solver's path
 build/host/pd_tool trace 0 200 260  # player state along the solver's path
 build/host/pd_tool trace 0 200 260 2  # ... along the rhythm check's run (2 ticks late)
@@ -143,4 +154,7 @@ models a human reacting at 20 Hz: a level that passes `solve N 3` has no
 frame-perfect inputs. It also fails a level if the winning run skips a
 portal. Every command that takes a level number also takes the path of a
 text file holding a level (the strings of a level file, one per line), which
-is how `tools/beat_align.py` tests its edits.
+is how `tools/beat_align.py` tests its edits, or `demo` for the title
+screen's demo loop (`src/core/demo.c`, timed to the menu song). That loop is
+played by a table of presses: after changing it, `pd_tool demo gen` prints
+a new table from the rhythm solver, and `pd_tool demo` checks it.

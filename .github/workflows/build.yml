@@ -44,7 +44,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
       - name: Build
         run: make -f Makefile.host -j"$(nproc)"
-      - name: Test (data checks, smoke test, solver, rhythm, coins)
+      - name: Test (data checks, smoke test, solver, rhythm, coins, contrast)
         run: make -f Makefile.host test
 
   release:

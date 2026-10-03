@@ -9,7 +9,8 @@ without redesigning it. Wherever the check gets stuck it tries, in order:
   1. inserting or deleting a *plain* column in the run-up (a copy of its left
      neighbour holding only blocks or air), which moves everything after it
      by one block;
-  2. moving an orb or pad one or two blocks;
+  2. moving an orb or pad one or two blocks sideways, or an orb one row up
+     or down;
   3. lengthening or shortening a spike pit by one column;
 
 and keeps the first edit that gets the check well past the sticking point.
@@ -96,6 +97,10 @@ class Level:
         si, c = self.locate(x)
         return self.plain(x, PIT) and any(r[c] in "^v,`" for r in self.sections[si][1])
 
+    def is_orb(self, x, row):
+        si, c = self.locate(x)
+        return self.sections[si][1][row][c] in "ypbg"
+
     def movables(self, x):
         """Rows of orbs/pads in column x."""
         si, c = self.locate(x)
@@ -103,16 +108,23 @@ class Level:
             return []
         return [i for i, r in enumerate(self.sections[si][1]) if r[c] in MOVABLE]
 
-    def move(self, x, row, d):
-        """Move the object at (x, row) by d columns within its section; False if blocked."""
+    def move(self, x, row, d, dr=0):
+        """Move the object at (x, row) by d columns and dr rows (rows count down
+        from the top line) within its section; False if blocked."""
         si, c = self.locate(x)
         rows = self.sections[si][1]
-        r = rows[row]
-        if not (1 <= c + d < len(r)) or r[c + d] != " ":
+        row2 = row + dr
+        if not (0 <= row2 < len(rows)) or rows[row2][0] != "|":
             return False
-        r = list(r)
-        r[c + d], r[c] = r[c], " "
+        if not (1 <= c + d < len(rows[row2])) or rows[row2][c + d] != " ":
+            return False
+        ch = rows[row][c]
+        r = list(rows[row])
+        r[c] = " "
         rows[row] = "".join(r)
+        r = list(rows[row2])
+        r[c + d] = ch
+        rows[row2] = "".join(r)
         return True
 
     def insert(self, x):
@@ -175,7 +187,13 @@ def candidates(level, fail, reach, grew):
     for x in near:
         for row in level.movables(x):
             for d in (-1, 1, -2, 2):
-                out.append(("move orb/pad at x=%d by %+d" % (x, d), [("move", x, row, d)]))
+                out.append(("move orb/pad at x=%d by %+d" % (x, d), [("move", x, row, d, 0)]))
+            if level.is_orb(x, row):
+                for dr in (1, -1):  # rows count from the top: +1 is one row lower
+                    for d in (0, -1, 1):
+                        out.append(("move orb at x=%d %s%s" % (x, "down" if dr > 0 else "up",
+                                                               " and %+d" % d if d else ""),
+                                    [("move", x, row, d, dr)]))
     for x in near:
         if level.pit(x):
             for op in ("delete", "insert"):  # shorter pits first: never harder if avoidable
@@ -188,7 +206,7 @@ def apply(level, edits):
     trial = level.copy()
     for e in edits:
         if e[0] == "move":
-            if not trial.move(e[1], e[2], e[3]):
+            if not trial.move(e[1], e[2], e[3], e[4]):
                 return None
             continue
         op, x, kind = e

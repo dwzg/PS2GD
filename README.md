@@ -25,6 +25,8 @@ an unofficial fan project, not affiliated with or endorsed by RobTop Games;
   (soundbars and AV receivers add delay), set **Options > Audio delay**: a
   metronome plays and four lights flash with the beat; move the value until
   the flashes land on the kick.
+- **A live title screen**: behind the menu the game plays a short loop of
+  level with the real engine, jumping on the beat of the menu music.
 - **5 vehicles**: cube, ship, ball, UFO and wave, plus gravity flips and four
   speeds.
 - Yellow/pink/blue/green **orbs**, yellow/pink/blue **pads**, spikes, saws.
@@ -118,7 +120,7 @@ a hyphen (`v1.1.0-rc1`) become pre-releases.
 ## Testing
 
 ```sh
-make -f Makefile.host test        # data checks, smoke test, solver, rhythm, coins
+make -f Makefile.host test        # data checks, smoke test, solver, rhythm, coins, contrast, title demo
 make -f Makefile.host test-full   # also proves levels beatable at 30 and 20 Hz input
 scripts/emu-test.sh               # run the real PS2 ELF in the Play! core, headless
 ```
@@ -163,7 +165,8 @@ attempt.
 
 Levels are ASCII art in `src/levels/*.c`; see
 [docs/LEVEL_FORMAT.md](docs/LEVEL_FORMAT.md) for the tile set, physics rules
-of thumb and the checking workflow.
+of thumb and the checking workflow. The title screen's demo loop is one more
+level, in `src/core/demo.c`.
 
 ## Layout
 

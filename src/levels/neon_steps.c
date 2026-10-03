@@ -31,7 +31,6 @@ const char *const LEVEL_NEON_STEPS[] = {
 "",
 "|             y                          ",
 "|                                        ",
-"|                                        ",
 "|  ^         ^^^^^          ^        ^^  ",
 "",
 /* bars 12-15: build */
@@ -106,7 +105,6 @@ const char *const LEVEL_NEON_STEPS[] = {
 "!6                                       ",
 "",
 "|                       y                ",
-"|                                        ",
 "|                                       S",
 "|Y ^^^       ^         ^^^^^     ^       ",
 "",

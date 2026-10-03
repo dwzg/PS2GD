@@ -19,6 +19,8 @@ typedef struct {
 
 void fx_clear(void);
 void fx_clear_space(int space);
+/* Move every particle of a space sideways (the title demo's loop jumps back). */
+void fx_shift(int space, float dx);
 Particle *fx_spawn(int space);
 void fx_update(float dt);
 /*
