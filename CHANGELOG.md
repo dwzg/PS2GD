@@ -28,6 +28,8 @@ First release.
   metronome and beat lights for TVs and speakers that play the sound late.
 - Every level can be played pressing on the beat of its music, and blocks,
   spikes, orbs and pads pulse with it.
+- Releases ship a single `PULSEDASH.ELF` (compressed, it unpacks itself at
+  boot) plus a zip with the documentation and licenses.
 - The version is shown on the title screen.
 - A PC version (SDL2) and developer tools: a level solver that also checks
   on-beat play, a tool that moves obstacles onto the beat, and an emulator
