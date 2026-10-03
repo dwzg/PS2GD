@@ -11,6 +11,7 @@
 
 #include "gfx_sdl.h"
 #include "../core/audio.h"
+#include "../core/draw.h"
 #include "../core/game.h"
 #include "../core/platform.h"
 
@@ -158,6 +159,7 @@ int main(int argc, char **argv)
                        (int)(SCREEN_W * scale), (int)(SCREEN_H * scale)};
         SDL_RenderSetViewport(ren, &vp);
         gfx_sdl_begin(ren, scale, scale);
+        draw_set_pixel_grid(scale); /* text and lines on whole window pixels */
         game_render((float)(1.0 - ahead * TICK_HZ));
         gfx_sdl_flush();
         SDL_RenderSetViewport(ren, NULL);

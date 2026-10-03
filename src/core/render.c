@@ -65,21 +65,33 @@ static void ground_band(const View *v, float gy, int dir, float alpha)
         else gfx_rect(x, edge, x + sw, gy, sep);
     }
 
-    /* glowing surface line, fading towards the screen edges */
+    /* glowing surface line, fading out over the last `fade` pixels towards
+     * each screen edge */
+    const float fade = 170.0f;
     float lw = grid_w(3.0f);
     float y0 = dir > 0 ? gy : gy - lw;
     Color lc = col_with_alpha(pal->ground_line, alpha);
     Color lt = col_with_alpha(pal->ground_line, 0.0f);
-    gfx_rect_h(0, y0, 170, y0 + lw, lt, lc);
-    gfx_rect(170, y0, SCREEN_W - 170, y0 + lw, lc);
-    gfx_rect_h(SCREEN_W - 170, y0, SCREEN_W, y0 + lw, lc, lt);
+    gfx_rect_h(0, y0, fade, y0 + lw, lt, lc);
+    gfx_rect(fade, y0, SCREEN_W - fade, y0 + lw, lc);
+    gfx_rect_h(SCREEN_W - fade, y0, SCREEN_W, y0 + lw, lc, lt);
 
+    /* its glow over the playfield, gone 14 px from the line, fading out
+     * towards the edges with it. Each end is two triangles from its bright
+     * inner corner (the glow there is as strong as the weaker of the two
+     * fades), so every backend splits it the same way. */
     float glow = (0.25f + 0.35f * v->pulse) * alpha;
     gfx_blend(BLEND_ADD);
     Color gc = col_with_alpha(pal->ground_line, glow);
     Color gz = col_with_alpha(pal->ground_line, 0.0f);
-    if (dir > 0) gfx_rect_v(80, gy - 14, SCREEN_W - 80, gy, gz, gc);
-    else gfx_rect_v(80, gy, SCREEN_W - 80, gy + 14, gc, gz);
+    float ye = gy - dir * 14.0f; /* where the glow ends */
+    if (dir > 0) gfx_rect_v(fade, ye, SCREEN_W - fade, gy, gz, gc);
+    else gfx_rect_v(fade, gy, SCREEN_W - fade, ye, gc, gz);
+    for (int side = 0; side < 2; side++) {
+        float xo = side ? SCREEN_W : 0.0f, xi = side ? SCREEN_W - fade : fade; /* outer, inner */
+        gfx_tri(xo, gy, gz, xi, gy, gc, xo, ye, gz);
+        gfx_tri(xi, gy, gc, xi, ye, gz, xo, ye, gz);
+    }
     gfx_blend(BLEND_ALPHA);
 }
 

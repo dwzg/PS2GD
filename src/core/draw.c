@@ -14,11 +14,7 @@ void draw_init(void)
     }
 }
 
-#ifdef PIXEL_GRID
 static float s_grid = PIXEL_GRID;
-#else
-static float s_grid;
-#endif
 
 void draw_set_pixel_grid(float g)
 {

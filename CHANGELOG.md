@@ -32,6 +32,13 @@ section from this file as release notes.
   (it used to fade in stripes where the outline's pieces overlapped), and
   it sits higher, above the next attempt's counter, instead of running
   into it. The LEVEL COMPLETE title pops in the same way.
+- The glow over the ground's surface line stopped short of the screen
+  edges with hard ends; it now fades out towards the edges with the line.
+- Uneven borders on the PS2 and PC: the resting cube's black frame came out
+  2 pixels wide on two sides and 3 on the others, and thin outlines
+  changed width as the level scrolled. Text, icons and thin lines are now
+  drawn on whole screen pixels in every build (1:1 on the PS2, the window's
+  scale on the PC), as on the PSP.
 
 ## [1.0.0] - 2026-10-03
 

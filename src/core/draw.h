@@ -8,13 +8,12 @@ void draw_init(void);
 
 /*
  * Pixel grid: device pixels per virtual pixel of the screen the game is
- * shown on, for drawing that keeps to whole device pixels (0: no grid, the
- * screen is drawn 1:1 or at any size). Builds for a target that scales the
- * virtual screen down start with its grid (PIXEL_GRID in common.h); pd_tool
- * sets others for the pictures it draws. On a grid, text (font.c), icons
- * (icons.c) and strokes (grid_w) are drawn on whole device pixels: a stroke
- * 1.8 pixels wide would otherwise come out 1 or 2 pixels wide depending on
- * where it lands.
+ * shown on (0: none, draw anywhere). Builds start with their console's
+ * (PIXEL_GRID in common.h: 1 on the PS2, 272/448 on the PSP); the PC build
+ * sets its window's scale and pd_tool others for the pictures it draws.
+ * Text (font.c), icons (icons.c) and strokes (grid_w) are drawn on whole
+ * device pixels: a border 2.4 pixels wide would otherwise come out 2 or 3
+ * pixels wide depending on where it lands.
  */
 void draw_set_pixel_grid(float g);
 float draw_pixel_grid(void);
