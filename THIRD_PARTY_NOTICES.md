@@ -5,7 +5,7 @@ effects, graphics, font, tools) are original work under the MIT license in
 [LICENSE](LICENSE). The builds also contain or use the following software,
 under its own license.
 
-## In the PlayStation 2 build (`pulsedash.elf`)
+## In the PlayStation 2 build (`PULSEDASH.ELF`)
 
 | Component | Used for | License |
 |-----------|----------|---------|

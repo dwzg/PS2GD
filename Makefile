@@ -1,5 +1,6 @@
 # PlayStation 2 build (requires the ps2dev toolchain: PS2SDK, GSKIT).
-#   make                 -> build/ps2/pulsedash.elf (+ packed pulsedash-packed.elf)
+#   make                 -> build/ps2/PULSEDASH.ELF, the game (compressed with ps2-packer),
+#                           and pulsedash-unpacked.elf (the same with debug info)
 #   make PERF=1          -> build/ps2-perf/..., logging per-frame EE cycle statistics
 #   make VERSION=v1.2.0  -> version shown on the title screen (default: git describe)
 #   ./scripts/build-ps2.sh   runs this inside the ps2dev/ps2dev Docker image
@@ -10,8 +11,8 @@ GSKIT ?= $(PS2DEV)/gsKit
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 OUT := build/ps2$(if $(filter 1,$(PERF)),-perf)
-EE_BIN := $(OUT)/pulsedash.elf
-EE_BIN_PACKED := $(OUT)/pulsedash-packed.elf
+EE_BIN := $(OUT)/pulsedash-unpacked.elf
+EE_BIN_PACKED := $(OUT)/PULSEDASH.ELF
 
 SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c) $(wildcard src/ps2/*.c)
 # IOP modules from ps2sdk, compiled into the ELF as C arrays (see src/ps2/irx.c)
@@ -45,9 +46,10 @@ $(OUT)/core/version.o: EE_CFLAGS += -DPD_VERSION=\"$(VERSION)\"
 $(OUT)/core/version.o: FORCE
 FORCE:
 
+# the packed ELF decompresses itself at boot: a tenth of the size, faster to load
 $(EE_BIN_PACKED): $(EE_BIN)
 	@if command -v ps2-packer >/dev/null 2>&1; then ps2-packer $< $@ > /dev/null && echo "packed: $@"; \
-	else cp $< $@; fi
+	else echo "warning: ps2-packer not found, $@ is not compressed"; cp $< $@; fi
 
 clean:
 	rm -rf $(OUT)

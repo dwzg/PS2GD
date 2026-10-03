@@ -54,9 +54,9 @@ an unofficial fan project, not affiliated with or endorsed by RobTop Games;
 
 ## Running it
 
-**On a PS2:** download `pulsedash-packed.elf` from the latest
+**On a PS2:** download `PULSEDASH.ELF` from the latest
 [release](../../releases/latest) (or build it, below), copy it to a USB
-stick and launch it with wLaunchELF/uLaunchELF (for example from
+stick or memory card and launch it with wLaunchELF/uLaunchELF (for example from
 FreeMcBoot), or from OPL's apps list. The version is shown in the corner of
 the title screen.
 Any controller in port 1 or 2 works; progress is saved to the memory card
@@ -75,8 +75,13 @@ work too).
 PS2, using the official toolchain image (needs Docker):
 
 ```sh
-scripts/build-ps2.sh          # -> build/ps2/pulsedash.elf and pulsedash-packed.elf
+scripts/build-ps2.sh          # -> build/ps2/PULSEDASH.ELF
 ```
+
+`PULSEDASH.ELF` is compressed with ps2-packer and unpacks itself at boot
+(about 200 KB instead of 2.4 MB). The build also leaves
+`pulsedash-unpacked.elf` next to it: the same program with debug symbols,
+for debugging in an emulator.
 
 or with a local [ps2dev](https://github.com/ps2dev/ps2dev) install
 (`PS2DEV`, `PS2SDK`, `GSKIT` set): `make`.
@@ -105,8 +110,8 @@ git tag v1.1.0
 git push origin v1.1.0
 ```
 
-The release carries `pulsedash-packed.elf`, `pulsedash.elf`, a zip with both
-plus the README, changelog and licenses, and `SHA256SUMS`. Its notes are the
+The release carries `PULSEDASH.ELF`, a zip with it plus the README,
+changelog and licenses, and `SHA256SUMS`. Its notes are the
 version's changelog section followed by the merged pull requests. Tags with
 a hyphen (`v1.1.0-rc1`) become pre-releases.
 
@@ -143,7 +148,7 @@ signals, flips right at the vblank and runs above the audio thread, so
 mixing fills the idle time and can never delay a flip.
 
 `make PERF=1` (or `scripts/build-ps2.sh PERF=1`) builds
-`build/ps2-perf/pulsedash.elf`, which logs how much of each frame the game
+`build/ps2-perf/PULSEDASH.ELF`, which logs how much of each frame the game
 logic, drawing and synthesizer take, measured with the EE cycle counter, and
 how many frames missed their vblank. In the Play! core (which counts roughly
 one cycle per instruction, so real hardware needs more), a level uses about

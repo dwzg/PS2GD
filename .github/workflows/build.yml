@@ -31,9 +31,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: pulsedash-ps2
-          path: |
-            build/ps2/pulsedash.elf
-            build/ps2/pulsedash-packed.elf
+          path: build/ps2/PULSEDASH.ELF
 
   host:
     name: PC build and level tests
@@ -66,10 +64,9 @@ jobs:
         run: |
           ver="$GITHUB_REF_NAME"
           mkdir -p "pkg/pulsedash-$ver"
-          cp dist/pulsedash-packed.elf dist/pulsedash.elf README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md \
-             "pkg/pulsedash-$ver/"
+          cp dist/PULSEDASH.ELF README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "pkg/pulsedash-$ver/"
           (cd pkg && zip -r "../dist/pulsedash-$ver.zip" "pulsedash-$ver")
-          (cd dist && sha256sum pulsedash-packed.elf pulsedash.elf "pulsedash-$ver.zip" > SHA256SUMS)
+          (cd dist && sha256sum PULSEDASH.ELF "pulsedash-$ver.zip" > SHA256SUMS)
           ls -l dist
       - name: Release notes
         run: |
@@ -82,9 +79,9 @@ jobs:
             echo "::warning::CHANGELOG.md has no section for ${ver#v}"
           fi
           {
-            echo "Copy \`pulsedash-packed.elf\` to a USB stick and start it from wLaunchELF / uLaunchELF or"
-            echo "OPL's apps list, or boot it in an emulator (Play! or PCSX2). \`pulsedash.elf\` is the same game"
-            echo "unpacked; the zip holds both ELFs with the README, changelog and licenses."
+            echo "Copy \`PULSEDASH.ELF\` to a USB stick or memory card and start it from wLaunchELF /"
+            echo "uLaunchELF or OPL's apps list, or boot it in an emulator (Play! or PCSX2). The zip holds"
+            echo "the same ELF with the README, changelog and licenses."
             cat changes.md
           } > notes.md
           cat notes.md
@@ -97,4 +94,4 @@ jobs:
           case "$ver" in *-*) pre="--prerelease" ;; esac
           gh release create "$ver" --repo "$GITHUB_REPOSITORY" --verify-tag $pre \
             --title "Pulse Dash $ver" --notes "$(cat notes.md)" --generate-notes \
-            dist/pulsedash-packed.elf dist/pulsedash.elf "dist/pulsedash-$ver.zip" dist/SHA256SUMS
+            dist/PULSEDASH.ELF "dist/pulsedash-$ver.zip" dist/SHA256SUMS

@@ -11,7 +11,7 @@
 # To play a level with on-beat input, use a perf build (it prints PD_MARK when
 # an attempt starts) and append the rhythm check's presses:
 #   scripts/build-ps2.sh PERF=1
-#   ELF=$PWD/build/ps2-perf/pulsedash.elf scripts/emu-test.sh 85 \
+#   ELF=$PWD/build/ps2-perf/PULSEDASH.ELF scripts/emu-test.sh 85 \
 #       "200:CROSS:6,330:CROSS:6,$(build/host/pd_tool script 0)"
 # (cube, ball and UFO parts replay reliably; ship and wave need frame-exact
 # holds, so an open-loop replay may drift there)
@@ -19,7 +19,7 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${PLAY_DIR:-$ROOT/build/play}
 PLAY_COMMIT=83700b2c31e593bc94e845b4b31b797be84dda59
-ELF=${ELF:-$ROOT/build/ps2/pulsedash.elf}
+ELF=${ELF:-$ROOT/build/ps2/PULSEDASH.ELF}
 
 if [ ! -f "$WORK/src/CMakeLists.txt" ]; then
     mkdir -p "$WORK/src"
