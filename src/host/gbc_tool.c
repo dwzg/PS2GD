@@ -1150,10 +1150,8 @@ static int cmd_export(const char *dir, const char *version)
             Rgb c[LC_COUNT];
             level_colors(p, c);
             fprintf(f, "    {{");
-            for (int k = 0; k < LC_COUNT; k++) {
-                put_rgb(f, c[k]);
-                fprintf(f, k + 1 < LC_COUNT ? ", " : "}},\n");
-            }
+            for (int k = 0; k < LC_COUNT; k++)
+                fprintf(f, "{%d, %d, %d, 0}%s", c[k].r >> 3, c[k].g >> 3, c[k].b >> 3, k + 1 < LC_COUNT ? ", " : "}},\n");
         }
         fprintf(f, "};\n\nconst uint8_t gbc_fixed_colors[%d][3] = {", FC_COUNT);
         for (int k = 0; k < FC_COUNT; k++) {

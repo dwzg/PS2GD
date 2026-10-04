@@ -39,8 +39,10 @@ enum {
     LC_COUNT
 };
 
+/* a level's colours, 5-bit red, green, blue and a 0 (palette.c steps
+ * through them 4 bytes at a time) */
 typedef struct {
-    uint8_t c[LC_COUNT][3];
+    uint8_t c[LC_COUNT][4];
 } GbLevelPal;
 
 /* Colours that don't change with the level's palette. */

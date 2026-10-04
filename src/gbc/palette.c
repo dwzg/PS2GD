@@ -3,9 +3,11 @@
  * palette, flashing on the beat, faded in and out), the menus' and the
  * sprites'. In the menus' ROM bank with the colour tables (gen/pals.c).
  *
- * This runs during play (every other frame after a beat), so it is table
- * driven: colours are kept as 5-bit channels, each of the 32 background
- * colours names the colour it shows, and only a palette change multiplies.
+ * This runs during play (every other frame after a beat, and while the
+ * level changes palette), so it is table driven: colours are kept as 5-bit
+ * channels, each of the 32 background colours names the colour it shows, a
+ * palette change is set up once and then stepped through the lerp table,
+ * and the two loops a palette change runs are in assembly.
  */
 #pragma bank 15
 #include "gbc.h"
@@ -67,6 +69,53 @@ static void put(uint8_t *out, const uint8_t *c, const uint8_t *ft)
     out[1] = (uint8_t)((g >> 3) | (b << 2));
 }
 
+/* compose() at full brightness, in assembly (three times as fast as
+ * SDCC's code; a palette change does this every other frame): the 32
+ * colours map names, from s_src, packed into g_bgpal. map in de. */
+static void compose_full(const uint8_t *map) __naked
+{
+    map;
+    __asm
+    ld hl, #_g_bgpal
+    ld c, #32
+1$:
+    ld a, (de)
+    inc de
+    push de
+    add a, a
+    add a, a
+    add a, #<_s_src
+    ld e, a
+    ld a, #0
+    adc a, #>_s_src
+    ld d, a
+    ld a, (de) ; red
+    inc de
+    ld b, a
+    ld a, (de) ; green: its low 3 bits to bits 5..7, high 2 to bits 0..1
+    inc de
+    rrca
+    rrca
+    rrca
+    push af
+    and a, #0xe0
+    or a, b
+    ld (hl+), a
+    ld a, (de) ; blue
+    add a, a
+    add a, a
+    ld b, a
+    pop af
+    and a, #0x03
+    or a, b
+    ld (hl+), a
+    pop de
+    dec c
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
 static void compose(const uint8_t *map, uint8_t fade)
 {
     const uint8_t *ft = s_fade[fade];
@@ -74,13 +123,113 @@ static void compose(const uint8_t *map, uint8_t fade)
     uint8_t i = 32;
     s_fade_done = fade;
     s_map_done = map;
+    g_pal_dirty |= 1;
+    if (fade == 8) {
+        compose_full(map);
+        return;
+    }
     do {
         const uint8_t *c = s_src[*map++];
         uint8_t r = ft[c[0]], g = ft[c[1]], b = ft[c[2]];
         *out++ = (uint8_t)(r | (g << 5));
         *out++ = (uint8_t)((g >> 3) | (b << 2));
     } while (--i);
-    g_pal_dirty |= 1;
+}
+
+/* A palette change, set up when it starts: for each channel of the level
+ * colours (and the 0 after each colour), how far it goes (bit 7: down) and
+ * where from. blend_step() moves them to the point s_bl_lerp (a row of the
+ * lerp table) says. Both in assembly: a change starts or steps every other
+ * frame of play. */
+static uint8_t s_bl[LC_COUNT * 4][2];
+static uint8_t s_bl_n;
+static const uint8_t *s_bl_lerp, *s_bl_a, *s_bl_b;
+
+/* s_bl from the colours at s_bl_a and s_bl_b */
+static void blend_start(void) __naked
+{
+    __asm
+    ld hl, #_s_bl_a
+    ld a, (hl+)
+    ld e, a
+    ld d, (hl)
+    ld hl, #_s_bl_b
+    ld a, (hl+)
+    ld c, a
+    ld b, (hl)
+    ld hl, #_s_bl
+1$:
+    ld a, (de) ; from
+    inc de
+    inc hl
+    ld (hl-), a
+    ld a, (bc) ; to
+    inc bc
+    inc hl
+    sub a, (hl)
+    dec hl
+    jr nc, 2$
+    cpl
+    inc a
+    or a, #0x80
+2$:
+    ld (hl+), a
+    inc hl
+    ld a, (_s_bl_n)
+    dec a
+    ld (_s_bl_n), a
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
+/* s_src[i][k] = start +- lerp[size], in assembly */
+static void blend_step(void) __naked
+{
+    __asm
+    ld bc, #_s_src
+    ld de, #_s_bl
+    ld hl, #_s_bl_lerp
+    ld a, (hl+)
+    ld h, (hl)
+    ld l, a
+1$:
+    ld a, (de) ; size, bit 7: down
+    inc de
+    push hl
+    bit 7, a
+    jr nz, 2$
+    add a, l
+    ld l, a
+    adc a, h
+    sub a, l
+    ld h, a
+    ld l, (hl)
+    ld a, (de) ; start
+    inc de
+    add a, l
+    jr 3$
+2$:
+    and a, #0x7f
+    add a, l
+    ld l, a
+    adc a, h
+    sub a, l
+    ld h, a
+    ld l, (hl)
+    ld a, (de)
+    inc de
+    sub a, l
+3$:
+    ld (bc), a
+    inc bc
+    pop hl
+    ld a, (_s_bl_n)
+    dec a
+    ld (_s_bl_n), a
+    jr nz, 1$
+    ret
+    __endasm;
 }
 
 static void flashed(uint8_t dst, uint8_t src, uint8_t flash)
@@ -109,18 +258,15 @@ void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade)
     }
     if (from != s_from || to != s_to || t != s_t) {
         /* the lerp table's row 0 is all 0 and row 32 the identity */
-        const uint8_t *pa = gbc_level_pals[from].c[0], *pb = gbc_level_pals[to].c[0];
-        const uint8_t *lerp = gbc_lerp5[(uint8_t)((t + 4) >> 3)];
-        uint8_t *o = s_src[0];
-        uint8_t i = LC_COUNT, k;
-        do {
-            k = 3;
-            do {
-                uint8_t ca = *pa++ >> 3, cb = *pb++ >> 3;
-                *o++ = cb >= ca ? (uint8_t)(ca + lerp[cb - ca]) : (uint8_t)(ca - lerp[ca - cb]);
-            } while (--k);
-            o++;
-        } while (--i);
+        if (from != s_from || to != s_to) {
+            s_bl_a = gbc_level_pals[from].c[0];
+            s_bl_b = gbc_level_pals[to].c[0];
+            s_bl_n = LC_COUNT * 4;
+            blend_start();
+        }
+        s_bl_lerp = gbc_lerp5[(uint8_t)((t + 4) >> 3)];
+        s_bl_n = LC_COUNT * 4;
+        blend_step();
         s_from = from;
         s_to = to;
         s_t = t;

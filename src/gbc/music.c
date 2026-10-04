@@ -16,6 +16,8 @@ typedef struct {
     uint8_t inst;
     uint8_t note; /* sounding note, 0 = none */
     uint8_t age;  /* ticks since the note started */
+    uint16_t freq;           /* the pulse channels' note: register value */
+    const int8_t *vib;       /* and its vibrato (VIB_BY_DEPTH row), 0 = none */
 } Chan;
 
 static Chan s_ch[4];
@@ -52,6 +54,17 @@ static const uint8_t DRUM_POLY[DR_COUNT][3] = {
     {0x10, 0x10, 0x10}, /* hat */
     {0x00, 0x00, 0x00}, /* accented hat */
     {0x11, 0x11, 0x11}, /* open hat */
+};
+
+/* Vibrato, about a quarter tone: VIB[age & 7] * depth / 2 for each depth
+ * ((2048 - frequency register) >> 7) a note can have */
+static const int8_t VIB_BY_DEPTH[16][8] = {
+    {0, 0, 0, 0, 0, 0, 0, 0},       {0, 1, 1, 1, 0, -1, -1, -1},     {0, 2, 3, 2, 0, -2, -3, -2},
+    {0, 3, 4, 3, 0, -3, -4, -3},    {0, 4, 6, 4, 0, -4, -6, -4},     {0, 5, 7, 5, 0, -5, -7, -5},
+    {0, 6, 9, 6, 0, -6, -9, -6},    {0, 7, 10, 7, 0, -7, -10, -7},   {0, 8, 12, 8, 0, -8, -12, -8},
+    {0, 9, 13, 9, 0, -9, -13, -9},  {0, 10, 15, 10, 0, -10, -15, -10}, {0, 11, 16, 11, 0, -11, -16, -11},
+    {0, 12, 18, 12, 0, -12, -18, -12}, {0, 13, 19, 13, 0, -13, -19, -13}, {0, 14, 21, 14, 0, -14, -21, -14},
+    {0, 15, 22, 15, 0, -15, -22, -15},
 };
 
 static uint16_t note_freq(uint8_t note)
@@ -98,9 +111,14 @@ static void pulse_on(uint8_t c, uint8_t inst, uint16_t f)
 static void note_on(uint8_t c)
 {
     Chan *ch = &s_ch[c];
+    if (c < 2) {
+        /* (kept for the vibrato, also while a sound effect has the channel) */
+        ch->freq = note_freq(ch->note);
+        ch->vib = INST_VIB[ch->inst] ? VIB_BY_DEPTH[(uint8_t)((2048 - ch->freq) >> 7) & 15] : 0;
+    }
     if (s_sfx_ticks[c]) return;
     if (c < 2) {
-        pulse_on(c, ch->inst, note_freq(ch->note));
+        pulse_on(c, ch->inst, ch->freq);
     } else if (c == 2) {
         /* the wave channel plays an octave below the pulse channels' register value */
         uint16_t f = note_freq((uint8_t)(ch->note + 12));
@@ -126,11 +144,8 @@ static void note_update(uint8_t c)
     if (ch->age < 255) ch->age++;
     if (c == 3) {
         if (ch->age < 3) NR43_REG = DRUM_POLY[ch->note < DR_COUNT ? ch->note : DR_HAT][ch->age];
-    } else if (c < 2 && INST_VIB[ch->inst] && ch->age > 12) {
-        static const int8_t VIB[8] = {0, 2, 3, 2, 0, -2, -3, -2};
-        uint16_t f = note_freq(ch->note);
-        uint8_t depth = (uint8_t)((2048 - f) >> 7); /* about a quarter tone */
-        f += (int16_t)(VIB[ch->age & 7] * depth) / 2;
+    } else if (c < 2 && ch->vib && ch->age > 12) {
+        uint16_t f = ch->freq + ch->vib[ch->age & 7];
         if (c == 0) {
             NR13_REG = (uint8_t)f;
             NR14_REG = (uint8_t)(f >> 8);

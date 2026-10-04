@@ -136,16 +136,22 @@ def play_level(game, level, held, finish, shots, every, perf=None):
     # the select screen starts at the level played last
     while g.selected != level:
         g.press("right")
+        g.tick(20)  # the card is redrawn over a few frames
         g.selected = (g.selected + 1) % 6
     g.press("a")
     if not g.wait_screen(SCR_PLAY):
         return False, "level did not start"
     # the buttons for each tick, put in place when the game reads the pad
     # for it (a frame's work can run past the emulator's frame boundary)
+    late = []
+
     def on_input(_):
         if perf is not None and g.u8("_g_phase") == PH_RUN:
             perf.sample(g)
-        g.m[g.sym["_g_test_keys"]] = J_A if held.get(g.u16("_gs_p", OFF_TICKS), False) else 0
+        t = g.u16("_gs_p", OFF_TICKS)
+        if g.u16("_g_dropped") > len(late):
+            late.append(t)
+        g.m[g.sym["_g_test_keys"]] = J_A if held.get(t, False) else 0
 
     g.pb.hook_register(0, g.sym["_input_update"], on_input, None)
     for _ in range(finish * 3 + 600):
@@ -167,6 +173,8 @@ def play_level(game, level, held, finish, shots, every, perf=None):
     if not g.u8("_g_snap", OFF_DONE):
         return False, "not finished after %d ticks" % ticks
     info = "finished in %d ticks (host: %d), %d frames took too long" % (ticks, finish, g.u16("_g_dropped"))
+    if late:
+        info += " (ticks %s%s)" % (" ".join(map(str, late[:12])), " ..." if len(late) > 12 else "")
     # the results come up after a moment
     g.tick(100)
     if shots:

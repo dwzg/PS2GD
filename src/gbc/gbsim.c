@@ -20,6 +20,24 @@ GsPlayer gs_p;
 #define P gs_p
 #define ONE 65536L
 
+/* The whole blocks and 1/65536 of the player's x and y (16.16), read and
+ * written as 16-bit halves: SDCC's 32-bit shifts and compares are slow. */
+#ifdef __SDCC
+#define X_LO() (((uint16_t *)&P.x)[0])
+#define X_HI() (((uint16_t *)&P.x)[1])
+#define Y_LO() (((uint16_t *)&P.y)[0])
+#define Y_HI() (((int16_t *)&P.y)[1])
+#define SET_X(hi, lo) (((uint16_t *)&P.x)[0] = (lo), ((uint16_t *)&P.x)[1] = (hi))
+#define SET_Y(hi, lo) (((uint16_t *)&P.y)[0] = (lo), ((int16_t *)&P.y)[1] = (hi))
+#else
+#define X_LO() ((uint16_t)P.x)
+#define X_HI() ((uint16_t)(P.x >> 16))
+#define Y_LO() ((uint16_t)P.y)
+#define Y_HI() ((int16_t)((uint32_t)P.y >> 16))
+#define SET_X(hi, lo) (P.x = (uint32_t)(uint16_t)(hi) << 16 | (uint16_t)(lo))
+#define SET_Y(hi, lo) (P.y = (int32_t)((uint32_t)(uint16_t)(hi) << 16 | (uint16_t)(lo)))
+#endif
+
 /* Speed portals 0..3: 8.4, 10.5, 13.125, 15.75 blocks per second. */
 const uint16_t GS_SPEEDS[4] = {2293, 2867, 3584, 4300};
 /* The float version's step, speed * h as a float32, in 1/65536 of a unit
@@ -272,63 +290,99 @@ static const uint16_t ROWS_FROM[16] = {0xffff, 0xfffe, 0xfffc, 0xfff8, 0xfff0, 0
 static const uint16_t ROWS_UPTO[16] = {0x0001, 0x0003, 0x0007, 0x000f, 0x001f, 0x003f, 0x007f, 0x00ff,
                                        0x01ff, 0x03ff, 0x07ff, 0x0fff, 0x1fff, 0x3fff, 0x7fff, 0xffff};
 
-/* Rows r0..r1 (clamped to the level) as a mask, 0 if none. */
-static uint16_t row_mask(int16_t r0, int16_t r1)
+/* The rows lo..hi clamped to the level, in r_lo..r_hi, and as a mask; 0
+ * if none. */
+static uint8_t r_lo, r_hi;
+#ifdef __SDCC
+static uint16_t rows_of(int16_t lo, int16_t hi) __naked
 {
-    if (r0 < 0) r0 = 0;
-    if (r1 > GS_ROWS - 1) r1 = GS_ROWS - 1;
-    if (r0 > r1) return 0;
-    return ROWS_FROM[r0] & ROWS_UPTO[r1];
+    lo;
+    hi;
+    __asm
+    bit 7, b ; hi < 0: none
+    jr nz, 9$
+    bit 7, d
+    jr z, 1$
+    xor a, a ; lo < 0: from row 0
+    jr 2$
+1$:
+    ld a, d
+    or a, a
+    jr nz, 9$
+    ld a, e
+    cp a, #16
+    jr nc, 9$ ; lo > 15: none
+2$:
+    ld (_r_lo), a
+    ld e, a
+    ld a, b
+    or a, a
+    jr nz, 3$
+    ld a, c
+    cp a, #16
+    jr c, 4$
+3$:
+    ld a, #15
+4$:
+    ld (_r_hi), a
+    cp a, e
+    jr c, 9$
+    add a, a
+    add a, #<_ROWS_UPTO
+    ld l, a
+    ld a, #0
+    adc a, #>_ROWS_UPTO
+    ld h, a
+    ld a, (hl+)
+    ld c, a
+    ld b, (hl)
+    ld a, e
+    add a, a
+    add a, #<_ROWS_FROM
+    ld l, a
+    ld a, #0
+    adc a, #>_ROWS_FROM
+    ld h, a
+    ld a, (hl+)
+    and a, c
+    ld c, a
+    ld a, (hl)
+    and a, b
+    ld b, a
+    ret
+9$:
+    ld bc, #0
+    ret
+    __endasm;
 }
+#else
+static uint16_t rows_of(int16_t lo, int16_t hi)
+{
+    if (hi < 0) return 0;
+    if (lo < 0) r_lo = 0;
+    else if ((uint16_t)lo > GS_ROWS - 1) return 0;
+    else r_lo = (uint8_t)lo;
+    r_hi = (uint16_t)hi > GS_ROWS - 1 ? GS_ROWS - 1 : (uint8_t)hi;
+    if (r_lo > r_hi) return 0;
+    return ROWS_FROM[r_lo] & ROWS_UPTO[r_hi];
+}
+#endif
 
-/* Does any cell of columns c0..c1, rows in `rows`, have a bit in masks? */
-static uint8_t any_in(const uint16_t *masks, int16_t c0, int16_t c1, uint16_t rows)
-{
-    int16_t c;
-    for (c = c0; c <= c1; c++)
-        if ((uint16_t)c < gs_width && (masks[(uint8_t)c & (GS_RING - 1)] & rows)) return 1;
-    return 0;
-}
+/* Is the cell above / below row cy of ring column ci a whole block? */
+#define BLOCK_ABOVE(ci, cy) ((cy) < GS_ROWS - 1 && (gs_ring_block[ci] & BIT[(cy) + 1]))
+#define BLOCK_BELOW(ci, cy) ((cy) > 0 && (gs_ring_block[ci] & BIT[(cy) - 1]))
 
-/* Is cell (cx, cy) a whole block? */
-static uint8_t block_at(int16_t cx, int16_t cy)
-{
-    if ((uint16_t)cx >= gs_width || (uint16_t)cy >= GS_ROWS) return 0;
-    return (gs_ring_block[(uint8_t)cx & (GS_RING - 1)] & BIT[cy]) != 0;
-}
-
-/* A solid cell's kind (block, slabs), 0 if it isn't solid. */
-static uint8_t solid_at(int16_t cx, int16_t cy)
-{
-    if ((uint16_t)cx >= gs_width || (uint16_t)cy >= GS_ROWS) return 0;
-    if (!(gs_ring_solid[(uint8_t)cx & (GS_RING - 1)] & BIT[cy])) return 0;
-    return GTI_KIND(gs_tile_info[gs_ring[(((uint8_t)cx & (GS_RING - 1)) << 4) | (uint8_t)cy]]);
-}
-
-static void hitbox(uint16_t *hw, uint16_t *hh)
-{
-    switch (P.mode) {
-    case GM_SHIP: *hw = 29491; *hh = 19661; break; /* 0.45 x 0.30 */
-    case GM_BALL: *hw = 29491; *hh = 29491; break; /* 0.45 x 0.45 */
-    case GM_UFO: *hw = 29491; *hh = 24904; break;  /* 0.45 x 0.38 */
-    case GM_WAVE: *hw = 10486; *hh = 10486; break; /* 0.16 */
-    default: *hw = 32768; *hh = 32768; break;      /* 0.5 */
-    }
-}
+/* Hitbox half extents (16.16) by mode: cube, ship, ball, UFO, wave. The
+ * outer box touches solids and objects, the inner one kills in a solid. */
+static const uint16_t HIT_W[5] = {32768, 29491, 29491, 29491, 10486};  /* 0.5, 0.45, 0.45, 0.45, 0.16 */
+static const uint16_t HIT_H[5] = {32768, 19661, 29491, 24904, 10486};  /* 0.5, 0.30, 0.45, 0.38, 0.16 */
+static const uint16_t INNER_W[5] = {11796, 9830, 10486, 10486, 6554}; /* 0.18, 0.15, 0.16, 0.16, 0.10 */
+static const uint16_t INNER_H[5] = {11796, 7864, 9830, 9830, 6554};   /* 0.18, 0.12, 0.15, 0.15, 0.10 */
 
 void gs_hitbox(uint16_t *hw, uint16_t *hh) GS_BANKED
 {
-    hitbox(hw, hh);
-}
-
-static void inner_hitbox(uint16_t *hw, uint16_t *hh)
-{
-    switch (P.mode) {
-    case GM_SHIP: *hw = 9830; *hh = 7864; break;   /* 0.15 x 0.12 */
-    case GM_WAVE: *hw = 6554; *hh = 6554; break;   /* 0.10 */
-    case GM_CUBE: *hw = 11796; *hh = 11796; break; /* 0.18 */
-    default: *hw = 10486; *hh = 9830; break;       /* 0.16 x 0.15 */
-    }
+    *hw = HIT_W[P.mode];
+    *hh = HIT_H[P.mode];
 }
 
 static uint8_t is_used(uint16_t key)
@@ -432,19 +486,19 @@ static uint16_t s_lo, s_hi, s_step, s_step_f;
 
 static void advance_x(void)
 {
-    uint16_t ip = (uint16_t)(P.x >> 16);
+    uint16_t ip = X_HI();
     if (ip && P.speed_idx == s_speed && ip >= s_lo) {
-        uint16_t lo = (uint16_t)P.x, nf = P.xfrac + s_step_f, nlo;
+        uint16_t lo = X_LO(), nf = P.xfrac + s_step_f, nlo;
         nlo = lo + s_step + (nf < P.xfrac);
         ip += nlo < lo;
         if (ip < s_hi) {
-            P.x = ((uint32_t)ip << 16) | nlo;
+            SET_X(ip, nlo);
             P.xfrac = nf;
             return;
         }
     }
     add_round(&P.x, &P.xfrac);
-    ip = (uint16_t)(P.x >> 16);
+    ip = X_HI();
     if (ip) {
         /* the step from the start of this power of two */
         uint32_t x;
@@ -478,103 +532,169 @@ static void enter_mode(uint8_t mode, int16_t cy)
 
 /* --- solids --- */
 
-/* No solid or object anywhere the player can reach this tick: the
- * sub-steps' cell tests would find nothing, so they are skipped. */
-static uint8_t s_free;
+/* A solid / an object somewhere the player can reach this tick (else the
+ * sub-steps' cell tests would find nothing, so they are skipped). */
+static uint8_t s_near_solid, s_near_obj;
 
 /* resolve_solids found solids in the cells around the box (else, unless
  * y moved since, the inner box has none either: it is inside the outer) */
 static uint8_t s_solids_near;
 static int32_t s_solids_y;
 
-/* Land on / bump into solid cells overlapping the outer box. */
-static void resolve_solids(int32_t prev_y)
+/* y before this sub-step, and the box's low and high edges then (whole
+ * blocks and 1/65536), worked out by prev_edges() when a cell needs them */
+static int32_t s_prev_y;
+static uint8_t s_prev_ok;
+static int16_t pli, phi;
+static uint16_t plf, phf;
+
+static void prev_edges(void)
 {
-    const uint8_t can_ceil = P.mode != GM_CUBE;
-    const uint16_t step_up = P.mode == GM_WAVE ? 3932 : 16384; /* 0.06 / 0.25 */
-    int16_t cx, cy, cx1, cy0, cy1;
-    uint8_t t;
-    /* the box's low and high edges before this sub-step */
-    uint16_t plf = (uint16_t)prev_y - s_hh, phf = (uint16_t)prev_y + s_hh;
-    int16_t pli = (int16_t)((uint16_t)((uint32_t)prev_y >> 16) - ((uint16_t)prev_y < s_hh));
-    int16_t phi = (int16_t)((uint16_t)((uint32_t)prev_y >> 16) + (phf < (uint16_t)prev_y));
+    uint16_t lo = (uint16_t)s_prev_y, hi = (uint16_t)((uint32_t)s_prev_y >> 16);
+    plf = lo - s_hh;
+    pli = (int16_t)(hi - (lo < s_hh));
+    phf = lo + s_hh;
+    phi = (int16_t)(hi + (phf < lo));
+    s_prev_ok = 1;
+}
 
-    s_solids_near = 0;
-    if (!s_free) {
-    s_cw = s_hw;
-    s_ch = s_hh;
-    me_x();
-    me_y();
-    cx1 = mx1i;
-    cy0 = my0i;
-    cy1 = my1i;
+/* how far the box may be in a solid and still step onto it (0.25, a
+ * wave's 0.06); whether it can bump its head (not as a cube); my0..my1
+ * are out of date (the box was moved onto or under a solid) */
+static uint16_t s_step_up;
+static uint8_t s_can_ceil, s_y_moved;
 
-    s_solids_near = any_in(gs_ring_solid, mx0i, cx1, row_mask(cy0, cy1));
-    if (s_solids_near)
-    for (cx = mx0i; cx <= cx1; cx++) {
-        for (cy = cy0; cy <= cy1; cy++) {
-            uint16_t top, bottom; /* the solid's top and bottom in its cell, 1/65536 (a whole block's top: 0) */
-            t = solid_at(cx, cy);
-            if (!t) continue;
-            me_y();
-            s_cx = cx;
-            s_cy = cy;
-            at_cell();
-            if (!box_solid(t)) continue;
-            top = t == GT_SLAB_LO ? 32768 : 0;
-            bottom = t == GT_SLAB_HI ? 32768 : 0;
-            /* low_ok: the box's low edge was above the top (or is within a
-             * step of it); high_ok: its high edge was below the bottom (all
-             * these points are inside the cell, whole part 0). Worked out
-             * only when the rest of the test needs them. */
-#define LOW_OK                                                                                \
-    ((pli > cy || (pli == cy && plf >= (uint16_t)(top - SNAP_EPS))) || dy0 > 0 ||            \
-     (dy0 == 0 && my0f >= (uint16_t)(top - step_up)))
-#define HIGH_OK                                                                               \
-    ((phi < cy || (phi == cy && phf <= (uint16_t)(bottom + SNAP_EPS))) || dy1 < 0 ||         \
-     (dy1 == 0 && my1f <= (uint16_t)(bottom + step_up)))
-            if (P.grav > 0) {
-                if (P.vy <= 0 && (t != GT_BLOCK || !block_at(cx, cy + 1)) && LOW_OK) {
-                    P.y = ((int32_t)cy << 16) + (top ? top : ONE) + s_hh;
-                    P.vy = 0;
-                    P.grounded = 1;
-                } else if (can_ceil && P.vy >= 0 && (t != GT_BLOCK || !block_at(cx, cy - 1)) && HIGH_OK) {
-                    P.y = ((int32_t)cy << 16) + bottom - s_hh;
-                    P.vy = 0;
-                }
-            } else {
-                if (P.vy >= 0 && (t != GT_BLOCK || !block_at(cx, cy - 1)) && HIGH_OK) {
-                    P.y = ((int32_t)cy << 16) + bottom - s_hh;
-                    P.vy = 0;
-                    P.grounded = 1;
-                } else if (can_ceil && P.vy <= 0 && (t != GT_BLOCK || !block_at(cx, cy + 1)) && LOW_OK) {
-                    P.y = ((int32_t)cy << 16) + (top ? top : ONE) + s_hh;
-                    P.vy = 0;
-                }
-            }
-#undef LOW_OK
-#undef HIGH_OK
+/* Can the box land on the solid (top: of its cell, 1/65536)? Its low edge
+ * was above the top before this sub-step, or is within a step of it (all
+ * these points are inside the cell, whole part 0). */
+static uint8_t low_ok(uint8_t cy, uint16_t top)
+{
+    if (dy0 > 0 || (dy0 == 0 && my0f >= (uint16_t)(top - s_step_up))) return 1;
+    if (!s_prev_ok) prev_edges();
+    return pli > (int16_t)cy || (pli == (int16_t)cy && plf >= (uint16_t)(top - SNAP_EPS));
+}
+
+/* ... hang under it: the same for the high edge and the solid's bottom */
+static uint8_t high_ok(uint8_t cy, uint16_t bottom)
+{
+    if (dy1 < 0 || (dy1 == 0 && my1f <= (uint16_t)(bottom + s_step_up))) return 1;
+    if (!s_prev_ok) prev_edges();
+    return phi < (int16_t)cy || (phi == (int16_t)cy && phf <= (uint16_t)(bottom + SNAP_EPS));
+}
+
+/* y = cy + top (a whole block's: 1) + hh, on the solid */
+static void land_on(uint8_t cy, uint16_t top)
+{
+    uint16_t lo = top + s_hh;
+    SET_Y((int16_t)cy + (top ? 0 : 1) + (lo < s_hh), lo);
+    s_y_moved = 1;
+}
+
+/* y = cy + bottom - hh, under it */
+static void hang_under(uint8_t cy, uint16_t bottom)
+{
+    SET_Y((int16_t)cy - (bottom < s_hh), (uint16_t)(bottom - s_hh));
+    s_y_moved = 1;
+}
+
+/* The solid cell (s_cx, cy) of ring column ci against the outer box. */
+static void solid_cell(uint8_t ci, uint8_t cy)
+{
+    uint8_t t = GTI_KIND(gs_tile_info[gs_ring[(ci << 4) | cy]]);
+    uint16_t top, bottom; /* the solid's top and bottom in its cell, 1/65536 (a whole block's top: 0) */
+    if (s_y_moved) {
+        me_y();
+        s_y_moved = 0;
+    }
+    s_cy = cy;
+    at_cell();
+    if (!box_solid(t)) return;
+    top = t == GT_SLAB_LO ? 32768 : 0;
+    bottom = t == GT_SLAB_HI ? 32768 : 0;
+    if (P.grav > 0) {
+        if (P.vy <= 0 && (t != GT_BLOCK || !BLOCK_ABOVE(ci, cy)) && low_ok(cy, top)) {
+            land_on(cy, top);
+            P.vy = 0;
+            P.grounded = 1;
+        } else if (s_can_ceil && P.vy >= 0 && (t != GT_BLOCK || !BLOCK_BELOW(ci, cy)) && high_ok(cy, bottom)) {
+            hang_under(cy, bottom);
+            P.vy = 0;
+        }
+    } else {
+        if (P.vy >= 0 && (t != GT_BLOCK || !BLOCK_BELOW(ci, cy)) && high_ok(cy, bottom)) {
+            hang_under(cy, bottom);
+            P.vy = 0;
+            P.grounded = 1;
+        } else if (s_can_ceil && P.vy <= 0 && (t != GT_BLOCK || !BLOCK_ABOVE(ci, cy)) && low_ok(cy, top)) {
+            land_on(cy, top);
+            P.vy = 0;
         }
     }
+}
+
+/* Land on / bump into solid cells overlapping the outer box: column by
+ * column, each bottom up, the cells gs_ring_solid has in the box's rows. */
+static void resolve_solids(void)
+{
+    s_solids_near = 0;
+    if (s_near_solid) {
+        uint16_t rows;
+        s_cw = s_hw;
+        s_ch = s_hh;
+        me_x();
+        me_y();
+        rows = rows_of(my0i, my1i);
+        if (rows) {
+            uint8_t cy0 = r_lo, n = (uint8_t)(mx1i - mx0i) + 1;
+            s_prev_ok = 0;
+            s_y_moved = 0;
+            s_can_ceil = P.mode != GM_CUBE;
+            s_step_up = P.mode == GM_WAVE ? 3932 : 16384;
+            s_cx = mx0i;
+            do {
+                if ((uint16_t)s_cx < gs_width) {
+                    uint8_t ci = (uint8_t)s_cx & (GS_RING - 1), cy;
+                    uint16_t m = gs_ring_solid[ci] & rows;
+                    if (m) {
+                        uint16_t bit = BIT[cy0];
+                        s_solids_near = 1;
+                        /* (m has no bits outside the rows) */
+                        for (cy = cy0;; cy++, bit <<= 1)
+                            if (m & bit) {
+                                solid_cell(ci, cy);
+                                m &= ~bit;
+                                if (!m) break;
+                            }
+                    }
+                }
+                s_cx++;
+            } while (--n);
+        }
     }
     s_solids_y = P.y;
 
     /* World floor / corridor bounds never kill, they just stop you. */
     if (P.mode == GM_CUBE) {
-        if (P.y < (int32_t)s_hh) {
-            P.y = s_hh;
+        int16_t hi = Y_HI();
+        if (hi < 0 || (hi == 0 && Y_LO() < s_hh)) { /* y < hh */
+            SET_Y(0, s_hh);
             if (P.vy < 0) P.vy = 0;
             if (P.grav > 0) P.grounded = 1;
         }
     } else {
-        int32_t fl = (int32_t)P.floor_y << 16, cl = (int32_t)P.ceil_y << 16;
-        if (P.y - s_hh < fl) {
-            P.y = fl + s_hh;
+        int16_t hi = Y_HI();
+        uint16_t lo = Y_LO(), top;
+        if (hi - (lo < s_hh) < P.floor_y) { /* y - hh < floor */
+            hi = P.floor_y;
+            lo = s_hh;
+            SET_Y(hi, lo);
             if (P.vy < 0) P.vy = 0;
             if (P.grav > 0) P.grounded = 1;
         }
-        if (P.y + s_hh > cl) {
-            P.y = cl - s_hh;
+        top = lo + s_hh;
+        hi += top < lo;
+        if (hi > P.ceil_y || (hi == P.ceil_y && top)) { /* y + hh > ceiling */
+            SET_Y(P.ceil_y - 1, (uint16_t)(0 - s_hh));
             if (P.vy > 0) P.vy = 0;
             if (P.grav < 0) P.grounded = 1;
         }
@@ -583,27 +703,36 @@ static void resolve_solids(int32_t prev_y)
 
 static uint8_t inner_hits_solid(void)
 {
-    uint16_t hw, hh;
-    int16_t cx, cy, cx1, cy1;
-    uint8_t t;
-    if (!s_solids_near && P.y == s_solids_y) return 0;
-    inner_hitbox(&hw, &hh);
-    s_cw = hw;
-    s_ch = hh;
+    uint16_t rows;
+    uint8_t n;
+    /* the inner box is inside the outer one */
+    if (!s_near_solid || (!s_solids_near && P.y == s_solids_y)) return 0;
+    s_cw = INNER_W[P.mode];
+    s_ch = INNER_H[P.mode];
     me_x();
     me_y();
-    cx1 = mx1i;
-    cy1 = my1i;
-    if (!any_in(gs_ring_solid, mx0i, cx1, row_mask(my0i, cy1))) return 0;
-    for (cx = mx0i; cx <= cx1; cx++)
-        for (cy = my0i; cy <= cy1; cy++) {
-            t = solid_at(cx, cy);
-            if (!t) continue;
-            s_cx = cx;
-            s_cy = cy;
-            at_cell();
-            if (box_solid(t)) return 1;
+    rows = rows_of(my0i, my1i);
+    if (!rows) return 0;
+    s_cx = mx0i;
+    n = (uint8_t)(mx1i - mx0i) + 1;
+    do {
+        if ((uint16_t)s_cx < gs_width) {
+            uint8_t ci = (uint8_t)s_cx & (GS_RING - 1), cy;
+            uint16_t m = gs_ring_solid[ci] & rows;
+            if (m) {
+                uint16_t bit = BIT[r_lo];
+                for (cy = r_lo;; cy++, bit <<= 1)
+                    if (m & bit) {
+                        s_cy = cy;
+                        at_cell();
+                        if (box_solid(GTI_KIND(gs_tile_info[gs_ring[(ci << 4) | cy]]))) return 1;
+                        m &= ~bit;
+                        if (!m) break;
+                    }
+            }
         }
+        s_cx++;
+    } while (--n);
     return 0;
 }
 
@@ -656,6 +785,96 @@ static void apply_pad(uint8_t k)
     P.grounded = 0;
 }
 
+/* Objects that can touch a box outside their cell: big saws (r 0.72),
+ * orbs (0.1 beyond) and portals (a block above and below). */
+#define REACHES_OUT(k) \
+    ((k) == GT_SAW_BIG || (uint8_t)((k) - GT_ORB_YELLOW) <= GT_ORB_GREEN - GT_ORB_YELLOW || \
+     (uint8_t)((k) - GT_PORTAL_CUBE) <= GT_SPEED_3 - GT_PORTAL_CUBE)
+
+/* The object in cell (s_cx, cy) against the outer box; info: its
+ * gs_tile_info. */
+static void touch_cell(uint8_t cy, uint8_t info)
+{
+    uint8_t k = GTI_KIND(info);
+    uint16_t key;
+    s_cy = cy;
+    at_cell();
+    if (k <= GT_SAW_SMALL) {
+        uint8_t hit;
+        if (P.dead) return;
+        switch (k) {
+        case GT_SPIKE_UP: hit = BOX(26214L, 13107L, 39322L, 39322L); break;       /* 0.4..0.6 x 0.2..0.6 */
+        case GT_SPIKE_DOWN: hit = BOX(26214L, 26214L, 39322L, 52429L); break;     /* 0.4..0.8 */
+        case GT_SPIKE_SM_UP: hit = BOX(26214L, 3277L, 39322L, 22938L); break;     /* 0.05..0.35 */
+        case GT_SPIKE_SM_DOWN: hit = BOX(26214L, 42598L, 39322L, 62259L); break;  /* 0.65..0.95 */
+        case GT_SAW_BIG: hit = circle_hit(s_cx, cy, 47186); break;                /* 0.72 */
+        default: hit = circle_hit(s_cx, cy, 23593); break;                        /* 0.36 */
+        }
+        if (hit) {
+            P.dead = 1;
+            P.events |= GE_DEATH;
+        }
+        return;
+    }
+    /* (each test below asks is_used after the box test: the same
+     * answer as asking first, and quicker) */
+    key = ((uint16_t)s_cx << 4) | cy;
+    if (k <= GT_ORB_GREEN) {
+        if (P.buf && BOX(-6554L, -6554L, 72090L, 72090L) && !is_used(key)) { /* centre +- 0.6 */
+            set_used(key);
+            P.buf = 0;
+            apply_orb(k);
+            P.events |= GE_ORB;
+            P.ev_cell = key;
+        }
+    } else if (k <= GT_PAD_BLUE) {
+        /* 0.05..0.95 x 0..0.3, or 0.7..1 on a ceiling */
+        if (((info & GTI_CEILING) ? BOX(3277L, 45875L, 62259L, ONE) : BOX(3277L, 0L, 62259L, 19661L)) &&
+            !is_used(key)) {
+            set_used(key);
+            apply_pad(k);
+            P.events |= GE_PAD;
+            P.ev_cell = key;
+        }
+    } else if (k <= GT_SPEED_3) {
+        /* 0.15..0.85, a block above and below */
+        if (!BOX(9830L, -ONE, 55706L, 2 * ONE) || is_used(key)) return;
+        set_used(key);
+        P.ev_cell = key;
+        switch (k) {
+        case GT_PORTAL_CUBE: enter_mode(GM_CUBE, cy); P.events |= GE_PORTAL; break;
+        case GT_PORTAL_SHIP: enter_mode(GM_SHIP, cy); P.events |= GE_PORTAL; break;
+        case GT_PORTAL_BALL: enter_mode(GM_BALL, cy); P.events |= GE_PORTAL; break;
+        case GT_PORTAL_UFO: enter_mode(GM_UFO, cy); P.events |= GE_PORTAL; break;
+        case GT_PORTAL_WAVE: enter_mode(GM_WAVE, cy); P.events |= GE_PORTAL; break;
+        case GT_PORTAL_FLIP:
+        case GT_PORTAL_NORMAL: {
+            int8_t ng = k == GT_PORTAL_FLIP ? -1 : 1;
+            if (ng != P.grav) {
+                P.grav = ng;
+                P.vy = (int16_t)((int32_t)P.vy * 2 / 5); /* x0.4 */
+                P.grounded = 0;
+                P.events |= GE_GRAVITY;
+            }
+            P.events |= GE_PORTAL;
+            break;
+        }
+        default:
+            P.speed_idx = (uint8_t)(k - GT_SPEED_0);
+            P.speed = GS_SPEEDS[P.speed_idx];
+            P.events |= GE_SPEED;
+            break;
+        }
+    } else if (k == GT_COIN) {
+        if (BOX(6554L, 6554L, 58982L, 58982L) && !is_used(key)) { /* 0.1..0.9 */
+            set_used(key);
+            P.coins |= (uint8_t)(1u << GTI_COIN(info));
+            P.events |= GE_COIN;
+            P.ev_cell = key;
+        }
+    }
+}
+
 /* Hazards, orbs, pads, portals and coins touching the outer box. Cells are
  * visited in the order the float version visits its objects (columns left
  * to right, each from the top down), over the columns and rows whose
@@ -664,111 +883,36 @@ static void apply_pad(uint8_t k)
  * column hold an object. */
 static void touch_objects(void)
 {
-    int16_t cx, cy, c1, r0, r1;
-    uint16_t rows;
+    uint16_t rows, own_rows;
+    uint8_t n, k, r1;
+    if (!s_near_obj) return;
     s_cw = s_hw;
     s_ch = s_hh;
     me_x();
     me_y();
-    c1 = mx1i + 1;
-    r0 = my0i - 1;
-    r1 = my1i + 1;
-    if (s_free) return;
-    rows = row_mask(r0, r1);
-    if (!rows || !any_in(gs_ring_obj, mx0i - 1, c1, rows)) return;
-    if (r0 < 0) r0 = 0;
-    if (r1 > GS_ROWS - 1) r1 = GS_ROWS - 1;
-    for (cx = mx0i - 1; cx <= c1; cx++) {
-        const uint8_t *col;
-        uint16_t m;
-        if ((uint16_t)cx >= gs_width) continue;
-        m = gs_ring_obj[(uint8_t)cx & (GS_RING - 1)] & rows;
+    own_rows = rows_of(my0i, my1i);
+    rows = rows_of(my0i - 1, my1i + 1);
+    if (!rows) return;
+    r1 = r_hi;
+    s_cx = mx0i - 1;
+    n = (uint8_t)(mx1i - mx0i) + 3;
+    for (k = 0; k < n; k++, s_cx++) {
+        uint8_t ci, cy;
+        uint16_t m, bit, own;
+        if ((uint16_t)s_cx >= gs_width) continue;
+        ci = (uint8_t)s_cx & (GS_RING - 1);
+        m = gs_ring_obj[ci] & rows;
         if (!m) continue;
-        col = gs_ring + (((uint8_t)cx & (GS_RING - 1)) << 4);
-        for (cy = r1; cy >= r0; cy--) {
-            uint8_t info, k;
-            uint16_t key;
-            if (!(m & BIT[cy])) continue;
-            info = gs_tile_info[col[cy]];
-            k = GTI_KIND(info);
-            s_cx = cx;
-            s_cy = cy;
-            at_cell();
-            if (k <= GT_SAW_SMALL) {
-                uint8_t hit;
-                if (P.dead) continue;
-                switch (k) {
-                case GT_SPIKE_UP: hit = BOX(26214L, 13107L, 39322L, 39322L); break;       /* 0.4..0.6 x 0.2..0.6 */
-                case GT_SPIKE_DOWN: hit = BOX(26214L, 26214L, 39322L, 52429L); break;     /* 0.4..0.8 */
-                case GT_SPIKE_SM_UP: hit = BOX(26214L, 3277L, 39322L, 22938L); break;     /* 0.05..0.35 */
-                case GT_SPIKE_SM_DOWN: hit = BOX(26214L, 42598L, 39322L, 62259L); break;  /* 0.65..0.95 */
-                case GT_SAW_BIG: hit = circle_hit(cx, cy, 47186); break;                   /* 0.72 */
-                default: hit = circle_hit(cx, cy, 23593); break;                           /* 0.36 */
-                }
-                if (hit) {
-                    P.dead = 1;
-                    P.events |= GE_DEATH;
-                }
-                continue;
+        /* the cells around the box's own: only an object reaching out of
+         * its cell (a big saw, an orb, a portal) can touch the box there */
+        own = k == 0 || k == n - 1 ? 0 : own_rows;
+        for (cy = r1, bit = BIT[r1];; cy--, bit >>= 1)
+            if (m & bit) {
+                uint8_t info = gs_tile_info[gs_ring[(ci << 4) | cy]];
+                if ((own & bit) || REACHES_OUT(GTI_KIND(info))) touch_cell(cy, info);
+                m &= ~bit;
+                if (!m) break;
             }
-            /* (each test below asks is_used after the box test: the same
-             * answer as asking first, and quicker) */
-            key = ((uint16_t)cx << 4) | (uint8_t)cy;
-            if (k <= GT_ORB_GREEN) {
-                if (P.buf && BOX(-6554L, -6554L, 72090L, 72090L) && !is_used(key)) { /* centre +- 0.6 */
-                    set_used(key);
-                    P.buf = 0;
-                    apply_orb(k);
-                    P.events |= GE_ORB;
-                    P.ev_cell = key;
-                }
-            } else if (k <= GT_PAD_BLUE) {
-                /* 0.05..0.95 x 0..0.3, or 0.7..1 on a ceiling */
-                if (((info & GTI_CEILING) ? BOX(3277L, 45875L, 62259L, ONE) : BOX(3277L, 0L, 62259L, 19661L)) &&
-                    !is_used(key)) {
-                    set_used(key);
-                    apply_pad(k);
-                    P.events |= GE_PAD;
-                    P.ev_cell = key;
-                }
-            } else if (k <= GT_SPEED_3) {
-                /* 0.15..0.85, a block above and below */
-                if (!BOX(9830L, -ONE, 55706L, 2 * ONE) || is_used(key)) continue;
-                set_used(key);
-                P.ev_cell = key;
-                switch (k) {
-                case GT_PORTAL_CUBE: enter_mode(GM_CUBE, cy); P.events |= GE_PORTAL; break;
-                case GT_PORTAL_SHIP: enter_mode(GM_SHIP, cy); P.events |= GE_PORTAL; break;
-                case GT_PORTAL_BALL: enter_mode(GM_BALL, cy); P.events |= GE_PORTAL; break;
-                case GT_PORTAL_UFO: enter_mode(GM_UFO, cy); P.events |= GE_PORTAL; break;
-                case GT_PORTAL_WAVE: enter_mode(GM_WAVE, cy); P.events |= GE_PORTAL; break;
-                case GT_PORTAL_FLIP:
-                case GT_PORTAL_NORMAL: {
-                    int8_t ng = k == GT_PORTAL_FLIP ? -1 : 1;
-                    if (ng != P.grav) {
-                        P.grav = ng;
-                        P.vy = (int16_t)((int32_t)P.vy * 2 / 5); /* x0.4 */
-                        P.grounded = 0;
-                        P.events |= GE_GRAVITY;
-                    }
-                    P.events |= GE_PORTAL;
-                    break;
-                }
-                default:
-                    P.speed_idx = (uint8_t)(k - GT_SPEED_0);
-                    P.speed = GS_SPEEDS[P.speed_idx];
-                    P.events |= GE_SPEED;
-                    break;
-                }
-            } else if (k == GT_COIN) {
-                if (BOX(6554L, 6554L, 58982L, 58982L) && !is_used(key)) { /* 0.1..0.9 */
-                    set_used(key);
-                    P.coins |= (uint8_t)(1u << GTI_COIN(info));
-                    P.events |= GE_COIN;
-                    P.ev_cell = key;
-                }
-            }
-        }
     }
 }
 
@@ -798,13 +942,12 @@ static uint16_t s_part_t;
  * y > height + 24 */
 static uint8_t y_out(void)
 {
-    int16_t yi = (int16_t)((uint32_t)P.y >> 16), top = (int16_t)gs_height + 24;
-    return yi < -6 || yi > top || (yi == top && (uint16_t)P.y);
+    int16_t yi = Y_HI(), top = (int16_t)gs_height + 24;
+    return yi < -6 || yi > top || (yi == top && Y_LO());
 }
 
 static void substep(uint8_t held)
 {
-    int32_t prev_y;
     uint8_t was_grounded;
 
     switch (P.mode) {
@@ -875,15 +1018,20 @@ static void substep(uint8_t held)
     }
 
     PART(0);
-    prev_y = P.y;
+    s_prev_y = P.y;
     was_grounded = P.grounded;
     advance_x();
-    P.y += P.vy;
+    {
+        /* y += vy */
+        uint16_t lo = Y_LO(), nlo = lo + (uint16_t)P.vy;
+        SET_Y(Y_HI() + (P.vy < 0 ? -1 : 0) + (nlo < lo), nlo);
+    }
     PART(1);
 
-    hitbox(&s_hw, &s_hh);
+    s_hw = HIT_W[P.mode];
+    s_hh = HIT_H[P.mode];
     P.grounded = 0;
-    resolve_solids(prev_y);
+    resolve_solids();
     if (P.grounded && !was_grounded) P.events |= GE_LAND;
     PART(2);
 
@@ -898,7 +1046,7 @@ static void substep(uint8_t held)
     PART(4);
     if (P.dead) return;
 
-    if ((uint16_t)(P.x >> 16) >= gs_width) {
+    if (X_HI() >= gs_width) {
         P.done = 1;
         P.events |= GE_COMPLETE;
     }
@@ -910,18 +1058,25 @@ static void substep(uint8_t held)
  * one column and row further). */
 static void broad_phase(void)
 {
-    uint16_t hw, hh, rows, near;
-    int16_t c;
-    hitbox(&hw, &hh);
-    s_cw = hw;
-    s_ch = hh;
+    uint16_t rows, solid = 0, obj = 0;
+    uint8_t n;
+    s_cw = HIT_W[P.mode];
+    s_ch = HIT_H[P.mode];
     me_x();
     me_y();
-    rows = row_mask(my0i - 2, my1i + 2);
-    near = 0;
-    for (c = mx0i - 1; c <= mx1i + 2 && !near; c++)
-        if ((uint16_t)c < gs_width) near = (gs_ring_solid[(uint8_t)c & (GS_RING - 1)] | gs_ring_obj[(uint8_t)c & (GS_RING - 1)]) & rows;
-    s_free = !near;
+    rows = rows_of(my0i - 2, my1i + 2);
+    s_cx = mx0i - 1;
+    n = (uint8_t)(mx1i - mx0i) + 4;
+    do {
+        if ((uint16_t)s_cx < gs_width) {
+            uint8_t ci = (uint8_t)s_cx & (GS_RING - 1);
+            solid |= gs_ring_solid[ci];
+            obj |= gs_ring_obj[ci];
+        }
+        s_cx++;
+    } while (--n);
+    s_near_solid = (solid & rows) != 0;
+    s_near_obj = (obj & rows) != 0;
 }
 
 void gs_tick(uint8_t held, uint8_t pressed) GS_BANKED

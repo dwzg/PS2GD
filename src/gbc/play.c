@@ -93,14 +93,24 @@ static int16_t col_of(int16_t px) { return (int16_t)((px + 256) >> 3) - 32; } /*
 
 static void build_column(int16_t c, uint8_t *t, uint8_t *a)
 {
-    uint8_t r, tile;
-    const uint8_t *cells = 0;
-    if (c >= 0 && (uint16_t)c < L->width) cells = L->cells + ((uint16_t)c << 4);
-    for (r = 0; r < COL_ROWS; r++) {
-        tile = cells ? cells[r] : T_EMPTY;
-        if (tile >= T_COIN && tile < T_COIN + 4 && (gs_p.coins & (1 << (tile - T_COIN)))) tile = T_EMPTY;
-        t[COL_ROWS - 1 - r] = tile;
-        a[COL_ROWS - 1 - r] = gfx_bg_attr[tile];
+    static const uint8_t COIN_BIT[4] = {1, 2, 4, 8};
+    uint8_t r = COL_ROWS, tile;
+    /* filled from the bottom (level row 0) up */
+    t += COL_ROWS;
+    a += COL_ROWS;
+    if (c >= 0 && (uint16_t)c < L->width) {
+        const uint8_t *cells = L->cells + ((uint16_t)c << 4);
+        do {
+            tile = *cells++;
+            if ((uint8_t)(tile - T_COIN) < 4 && (gs_p.coins & COIN_BIT[tile - T_COIN])) tile = T_EMPTY;
+            *--t = tile;
+            *--a = gfx_bg_attr[tile];
+        } while (--r);
+    } else {
+        do {
+            *--t = T_EMPTY;
+            *--a = gfx_bg_attr[T_EMPTY];
+        } while (--r);
     }
 }
 
@@ -672,6 +682,7 @@ void play_level(uint8_t level, uint8_t practice)
     g_phase = PH_RUN;
     g_dropped = 0;
     music_play(practice ? SONG_PRACTICE_GB : SONG_FIRST_LEVEL_GB + L->song);
+    s_vbl_start = g_vbl_count;
     while (!s_quit) {
 #ifdef PD_PERF
         uint16_t t, tm;
