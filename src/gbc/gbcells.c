@@ -26,9 +26,9 @@ static void copy_column(int16_t c)
         for (r = 0; r < GS_ROWS; r++, bit <<= 1) {
             d[r] = s[r];
             uint8_t k = GTI_KIND(gs_tile_info[s[r]]);
-            if (k > GT_SLAB_HI) m |= bit;
+            if (k > OBJ_SLAB_HI) m |= bit;
             else if (k) sm |= bit;
-            if (k == GT_BLOCK) bm |= bit;
+            if (k == OBJ_BLOCK) bm |= bit;
         }
     }
     gs_ring_obj[(uint8_t)c & (GS_RING - 1)] = m;

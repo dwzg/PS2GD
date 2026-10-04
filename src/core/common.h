@@ -17,31 +17,14 @@
 #define GAME_TITLE "PULSE DASH"
 
 /*
- * Target profile. The default is the PS2's (the PC build plays the same):
- * a 640x448 virtual screen. PD_PSP selects the PSP's: its 480x272 screen is
- * wider, so the virtual screen is too (levels show more of what is ahead,
- * menus laid out for 640 stay centred through UI_X), the screen is scaled
- * down to the LCD, and help texts name the PSP's buttons.
- *
- * PIXEL_GRID is how many of the console's screen pixels one virtual pixel
- * covers: text, icons and thin lines are drawn on whole screen pixels so
- * they stay sharp and even (draw.h).
+ * The platform: its virtual screen width (SCREEN_W; the height is always
+ * 448), its name and button names for help texts, and PIXEL_GRID, how many
+ * of the console's screen pixels one virtual pixel covers (text, icons and
+ * thin lines are drawn on whole screen pixels so they stay sharp and even,
+ * draw.h). From target.h in the platform's source folder (src/ps2,
+ * src/psp; the PC build's src/host/target.h picks one of them).
  */
-#ifdef PD_PSP
-#define SCREEN_W 790 /* 448 * 480 / 272, rounded down */
-#define TARGET_NAME "PSP"
-#define BTN_NAME_L "L"
-#define BTN_NAME_R "R"
-/* device pixels per virtual pixel, across and down: the 790 virtual pixels
- * across come to 479.6 of the LCD's 480 */
-#define PIXEL_GRID (272.0f / SCREEN_H)
-#else
-#define SCREEN_W 640
-#define TARGET_NAME "PLAYSTATION 2"
-#define BTN_NAME_L "L1"
-#define BTN_NAME_R "R1"
-#define PIXEL_GRID 1.0f /* the GS draws the virtual screen 1:1 */
-#endif
+#include "target.h"
 #define SCREEN_H 448
 
 /* x in a layout drawn for a 640-wide screen, centred on this one */

@@ -3,53 +3,14 @@
  *
  * Levels are authored as ASCII art (see src/levels/ and docs/LEVEL_FORMAT.md).
  * A parsed level is a solid grid (blocks/slabs) plus a list of objects sorted
- * by column for spikes, saws, orbs, pads, portals and coins.
+ * by column (each column's from the top down) for spikes, saws, orbs, pads,
+ * portals and coins.
  */
 #ifndef PD_LEVEL_H
 #define PD_LEVEL_H
 
 #include "common.h"
-
-enum ObjType {
-    OBJ_NONE = 0,
-    /* solids live in the grid only */
-    OBJ_BLOCK,
-    OBJ_SLAB_LO,
-    OBJ_SLAB_HI,
-    /* hazards */
-    OBJ_SPIKE_UP,
-    OBJ_SPIKE_DOWN,
-    OBJ_SPIKE_SM_UP,
-    OBJ_SPIKE_SM_DOWN,
-    OBJ_SAW_BIG,
-    OBJ_SAW_SMALL,
-    /* orbs (activated by pressing while touching) */
-    OBJ_ORB_YELLOW,
-    OBJ_ORB_PINK,
-    OBJ_ORB_BLUE,
-    OBJ_ORB_GREEN,
-    /* pads (activated by touching) */
-    OBJ_PAD_YELLOW,
-    OBJ_PAD_PINK,
-    OBJ_PAD_BLUE,
-    /* portals */
-    OBJ_PORTAL_CUBE,
-    OBJ_PORTAL_SHIP,
-    OBJ_PORTAL_BALL,
-    OBJ_PORTAL_UFO,
-    OBJ_PORTAL_WAVE,
-    OBJ_PORTAL_GRAV_FLIP,
-    OBJ_PORTAL_GRAV_NORMAL,
-    OBJ_SPEED_0,
-    OBJ_SPEED_1,
-    OBJ_SPEED_2,
-    OBJ_SPEED_3,
-    /* collectibles */
-    OBJ_COIN,
-    OBJ_TYPE_COUNT
-};
-
-enum PlayerMode { MODE_CUBE = 0, MODE_SHIP, MODE_BALL, MODE_UFO, MODE_WAVE, MODE_COUNT };
+#include "sim_rules.h" /* object types, player modes */
 
 /* Object flags */
 #define OF_CEILING 0x01 /* pad/spike attached to a ceiling */

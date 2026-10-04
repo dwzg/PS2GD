@@ -87,7 +87,7 @@ typedef struct {
     int menu_sel;
     int sel_level;
     float sel_scroll;
-    int garage_row, garage_mode;
+    int garage_row;
     int options_sel;
     int erase_confirm;
     float erase_t;
@@ -126,6 +126,10 @@ void play_draw_player(const PlayState *ps, const View *v);
 #define DEMO_TAIL (24 + (SCREEN_W - 640 + 33) / 34)
 #define DEMO_WRAP (DEMO_LOOP + 8.0f)
 const char *const *demo_level_src(void);
+/* the run's presses (for gbc_tool): button held while x is in [x0, x1),
+ * or when a tick steps over the whole range */
+int demo_press_count(void);
+void demo_press(int i, float *x0, float *x1);
 /* beat: the menu song's beat as heard, or NULL if unknown; returns 1 if the run died */
 int demo_tick(PlayState *ps, const float *beat);
 void demo_render(const PlayState *ps, const Palette *pal);

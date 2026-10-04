@@ -75,8 +75,8 @@ void game_status(char *buf, int cap)
     const Game *g = &g_game;
     if (g->screen == SCR_PLAY && g->play.L)
         snprintf(buf, (size_t)cap, "screen=play level=%d attempt=%d phase=%d x=%.1f%s best=%d", g->play.level_idx,
-                 g->play.attempt, g->play.phase, (double)g->play.p.x, g->play.practice ? " practice" : "",
-                 g->save.best[g->play.level_idx % SAVE_MAX_LEVELS]);
+                 g->play.attempt, g->play.phase, (double)sim_x(&g->play.p), g->play.practice ? " practice" : "",
+                 g->save.progress.best[g->play.level_idx % SAVE_MAX_LEVELS]);
     else
         snprintf(buf, (size_t)cap, "screen=%s sel=%d level=%d song=%d", names[g->screen % 5], g->menu_sel,
                  g->sel_level, audio_current_song());
@@ -373,7 +373,7 @@ static void draw_level_card(int idx, float cx)
     font_draw_fancy(x0 + 300, 148, 3.0f, RGB(255, 245, 160), RGB(255, 190, 40), RGB(0, 0, 0), 2.0f, ALIGN_CENTER, buf);
 
     int s = idx < SAVE_MAX_LEVELS ? idx : 0;
-    uint8_t coins = g->save.coins[s];
+    uint8_t coins = g->save.progress.coins[s];
     for (int i = 0; i < info.ncoins; i++) {
         float ccx = x0 + 300 + (i - (info.ncoins - 1) * 0.5f) * 40;
         if ((coins >> i) & 1) render_coin(ccx, 196, 13, 0.0f, 1.0f, 0);
@@ -385,16 +385,16 @@ static void draw_level_card(int idx, float cx)
 
     float ty = font_center_y(232, 244, 2.0f); /* text beside the bars */
     font_draw(x0 + 30, ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
-    render_progress_bar(x0 + 140, 232, x1 - 80, 244, g->save.best[s] / 100.0f, RGB(90, 255, 120), RGB(210, 255, 210));
-    snprintf(buf, sizeof(buf), "%d%%", g->save.best[s]);
+    render_progress_bar(x0 + 140, 232, x1 - 80, 244, g->save.progress.best[s] / 100.0f, RGB(90, 255, 120), RGB(210, 255, 210));
+    snprintf(buf, sizeof(buf), "%d%%", g->save.progress.best[s]);
     font_draw(x1 - 66, ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     ty = font_center_y(262, 274, 2.0f);
     font_draw(x0 + 30, ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
-    render_progress_bar(x0 + 140, 262, x1 - 80, 274, g->save.best_practice[s] / 100.0f, RGB(80, 200, 255),
+    render_progress_bar(x0 + 140, 262, x1 - 80, 274, g->save.progress.best_practice[s] / 100.0f, RGB(80, 200, 255),
                         RGB(210, 240, 255));
-    snprintf(buf, sizeof(buf), "%d%%", g->save.best_practice[s]);
+    snprintf(buf, sizeof(buf), "%d%%", g->save.progress.best_practice[s]);
     font_draw(x1 - 66, ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
-    if (g->save.best[s] >= 100) {
+    if (g->save.progress.best[s] >= 100) {
         font_draw_fancy(x1 - 20, 82, 2.0f, RGB(160, 255, 170), RGB(60, 220, 100), RGB(0, 0, 0), 2.0f, ALIGN_RIGHT,
                         "COMPLETE");
     }
@@ -460,8 +460,6 @@ static void garage_tick(void)
         default: g->save.col2 = (uint8_t)((g->save.col2 + PLAYER_COLOR_COUNT + d) % PLAYER_COLOR_COUNT); break;
         }
     }
-    if (g->pressed & (BTN_L1 | BTN_SQUARE)) g->garage_mode = (g->garage_mode + MODE_COUNT - 1) % MODE_COUNT;
-    if (g->pressed & (BTN_R1 | BTN_TRIANGLE)) g->garage_mode = (g->garage_mode + 1) % MODE_COUNT;
     if (g->pressed & (BTN_CIRCLE | BTN_CROSS | BTN_START)) {
         audio_sfx(SFX_MENU_BACK);
         screen_go(SCR_TITLE);
@@ -474,17 +472,14 @@ static void garage_render(void)
     draw_menu_backdrop(&g_palettes[7], g->t * 1.5f, beat_pulse());
     font_draw_fancy(SCREEN_W / 2, 20, 4.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, "GARAGE");
 
-    /* vehicle previews */
+    /* the icon and colours on every vehicle */
     render_panel(UI_X(60), 60, UI_X(580), 170, RGBA(0, 0, 0, 180), RGBA(255, 255, 255, 90));
     static const char *mnames[MODE_COUNT] = {"CUBE", "SHIP", "BALL", "UFO", "WAVE"};
     for (int m = 0; m < MODE_COUNT; m++) {
         float cx = UI_X(112 + m * 104);
-        int sel = m == g->garage_mode;
-        float size = sel ? 52.0f : 38.0f;
         float ang = m == MODE_BALL ? g->t * 3.0f : (m == MODE_WAVE ? -0.6f : 0.0f);
-        if (sel) draw_glow(cx, 108, 60, col_with_alpha(c1_of(), 0.35f));
-        icon_draw_mode(m, cx, 108, size, ang, 0, g->save.icon, c1_of(), c2_of());
-        font_draw(cx, 148, 2.0f, sel ? COL_WHITE : RGB(150, 160, 180), ALIGN_CENTER, mnames[m]);
+        icon_draw_mode(m, cx, 108, 44.0f, ang, 0, g->save.icon, c1_of(), c2_of());
+        font_draw(cx, 148, 2.0f, RGB(200, 210, 230), ALIGN_CENTER, mnames[m]);
     }
 
     /* icon row */
@@ -495,11 +490,12 @@ static void garage_render(void)
         render_panel(UI_X(40), y - 6, UI_X(600), y + 58, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
         font_draw(UI_X(56), y + 2, 2.0f, sel ? COL_WHITE : RGB(160, 170, 190), ALIGN_LEFT, rows[r]);
         if (r == 0) {
+            /* (the chosen one framed as the colours are, clear of the
+             * panel's edge) */
             for (int i = 0; i < ICON_COUNT; i++) {
-                float cx = UI_X(80 + i * 66), cy = y + 37;
-                int on = g->save.icon == i;
-                if (on) gfx_rect(cx - 20, cy - 20, cx + 20, cy + 20, RGB(120, 255, 150));
-                icon_draw_cube(cx, cy, on ? 34 : 28, 0.0f, i, c1_of(), c2_of());
+                float cx = UI_X(80 + i * 66), cy = y + 36;
+                if (g->save.icon == i) gfx_rect(cx - 17, cy - 17, cx + 17, cy + 17, RGB(120, 255, 150));
+                icon_draw_cube(cx, cy, 28, 0.0f, i, c1_of(), c2_of());
             }
             font_draw(UI_X(590), y + 2, 2.0f, RGB(255, 240, 160), ALIGN_RIGHT, g_icon_names[g->save.icon % ICON_COUNT]);
         } else {
@@ -514,7 +510,7 @@ static void garage_render(void)
         }
     }
     font_draw_fancy(SCREEN_W / 2, SCREEN_H - 24, 2.0f, COL_WHITE, RGB(220, 230, 255), RGB(0, 0, 0), 2.0f, ALIGN_CENTER,
-                    GLYPH_LEFT GLYPH_RIGHT " CHANGE   " BTN_NAME_L "/" BTN_NAME_R " PREVIEW   " GLYPH_CIRCLE " BACK");
+                    GLYPH_LEFT GLYPH_RIGHT " CHANGE   " GLYPH_CIRCLE " BACK");
 }
 
 /* --- options -------------------------------------------------------- */
@@ -643,8 +639,8 @@ static void options_render(void)
     char buf[64];
     int done = 0, coins = 0;
     for (int i = 0; i < g_level_count && i < SAVE_MAX_LEVELS; i++) {
-        if (g->save.best[i] >= 100) done++;
-        for (int k = 0; k < 3; k++) coins += (g->save.coins[i] >> k) & 1;
+        if (g->save.progress.best[i] >= 100) done++;
+        for (int k = 0; k < 3; k++) coins += (g->save.progress.coins[i] >> k) & 1;
     }
     render_panel(UI_X(60), 268, UI_X(580), 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
     font_draw(UI_X(80), 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "CONTROLS");
@@ -652,7 +648,7 @@ static void options_render(void)
     font_draw(UI_X(80), 322, 2.0f, COL_WHITE, ALIGN_LEFT, "START  PAUSE");
     font_draw(UI_X(80), 340, 2.0f, COL_WHITE, ALIGN_LEFT, "PRACTICE: " GLYPH_SQUARE " CHECKPOINT  " GLYPH_TRIANGLE " REMOVE");
     font_draw(UI_X(80), 368, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "STATS");
-    snprintf(buf, sizeof(buf), "ATTEMPTS %u  JUMPS %u", (unsigned)g->save.total_attempts, (unsigned)g->save.total_jumps);
+    snprintf(buf, sizeof(buf), "ATTEMPTS %u  JUMPS %u", (unsigned)g->save.progress.total_attempts, (unsigned)g->save.progress.total_jumps);
     font_draw(UI_X(80), 388, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     snprintf(buf, sizeof(buf), "LEVELS %d/%d  COINS %d", done, g_level_count, coins);
     font_draw(UI_X(80), 406, 2.0f, COL_WHITE, ALIGN_LEFT, buf);

@@ -278,7 +278,7 @@ static Color orb_color(int t)
 
 static int is_used(const Player *p, int id)
 {
-    return p && ((p->used[id >> 5] >> (id & 31)) & 1u);
+    return p && sim_used(p, id);
 }
 
 void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_coins)

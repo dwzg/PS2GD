@@ -10,6 +10,8 @@
  * and the two loops a palette change runs are in assembly.
  */
 #pragma bank 15
+#include <string.h>
+
 #include "gbc.h"
 
 /* colour channel * k / 8, for fades */
@@ -232,12 +234,18 @@ static void blend_step(void) __naked
     __endasm;
 }
 
-static void flashed(uint8_t dst, uint8_t src, uint8_t flash)
+/* The block edges and the ground line pulse with the beat. Their colours
+ * are nearly white in every palette, so they rest 40% of the way to the
+ * colour beside them (block fill, ground) and the beat brings them back:
+ * flash 16 all the way, 0 not at all. */
+static void flashed(uint8_t dst, uint8_t src, uint8_t beside, uint8_t flash)
 {
+    const uint8_t *rest = gbc_lerp5[13], *up = gbc_lerp5[flash << 1];
     uint8_t k;
     for (k = 0; k < 3; k++) {
-        uint8_t c = s_src[src][k];
-        s_src[dst][k] = (uint8_t)(c + gbc_lerp5[flash << 1][31 - c]); /* flash of 16 */
+        uint8_t c = s_src[src][k], b = s_src[beside][k], dim;
+        dim = c >= b ? (uint8_t)(c - rest[c - b]) : (uint8_t)(c + rest[b - c]);
+        s_src[dst][k] = c >= dim ? (uint8_t)(dim + up[c - dim]) : (uint8_t)(dim - up[dim - c]);
     }
 }
 
@@ -247,12 +255,12 @@ void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade)
         /* only the beat's flash changed: the two colours it lights up */
         if (flash != s_flash) {
             const uint8_t *ft = s_fade[fade];
-            flashed(SRC_EDGE_FLASH, LC_EDGE, flash);
-            flashed(SRC_LINE_FLASH, LC_LINE, flash);
+            flashed(SRC_EDGE_FLASH, LC_EDGE, LC_FILL, flash);
+            flashed(SRC_LINE_FLASH, LC_LINE, LC_GROUND, flash);
             s_flash = flash;
             put((uint8_t *)&g_bgpal[PAL_WORLD * 4 + 2], s_src[SRC_EDGE_FLASH], ft);
             put((uint8_t *)&g_bgpal[PAL_GROUND * 4 + 2], s_src[SRC_LINE_FLASH], ft);
-            g_pal_dirty |= 1;
+            g_pal_dirty |= 4; /* (video_vblank uploads just these two) */
         }
         return;
     }
@@ -273,11 +281,18 @@ void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade)
         s_flash = 0xff;
     }
     if (flash != s_flash) {
-        flashed(SRC_EDGE_FLASH, LC_EDGE, flash);
-        flashed(SRC_LINE_FLASH, LC_LINE, flash);
+        flashed(SRC_EDGE_FLASH, LC_EDGE, LC_FILL, flash);
+        flashed(SRC_LINE_FLASH, LC_LINE, LC_GROUND, flash);
         s_flash = flash;
     }
     compose(LEVEL_SRC, fade);
+}
+
+void pal_black(void) BANKED
+{
+    memset(g_bgpal, 0, sizeof(g_bgpal));
+    s_fade_done = 0xff; /* (the next palette is composed afresh) */
+    g_pal_dirty |= 1;
 }
 
 void pal_menu(uint8_t fade) BANKED
@@ -286,15 +301,68 @@ void pal_menu(uint8_t fade) BANKED
     compose(MENU_SRC, fade);
 }
 
+/* a 5-bit colour into a palette entry */
+static void put5(uint8_t *out, const uint8_t *c)
+{
+    out[0] = (uint8_t)(c[0] | (c[1] << 5));
+    out[1] = (uint8_t)((c[1] >> 3) | (c[2] << 2));
+}
+
+static const uint8_t *player_color(uint8_t k)
+{
+    return gbc_player_colors[k < PLAYER_COLOR_COUNT ? k : 0];
+}
+
 void pal_sprites(void) BANKED
 {
-    uint8_t p, i;
+    uint8_t p, i, c[3];
     uint8_t *out = (uint8_t *)g_objpal;
     for (p = 0; p < 3; p++)
-        for (i = 0; i < 4; i++) {
-            uint8_t r = gbc_obj_pals[p][i][0] >> 3, g = gbc_obj_pals[p][i][1] >> 3, b = gbc_obj_pals[p][i][2] >> 3;
-            *out++ = (uint8_t)(r | (g << 5));
-            *out++ = (uint8_t)((g >> 3) | (b << 2));
+        for (i = 0; i < 4; i++, out += 2) {
+            /* the player and its effects in the colours of the garage */
+            if (p < 2 && i == 1) {
+                put5(out, player_color(g_save.col1));
+            } else if ((p == 0 && i == 2) || (p == 1 && i == 3)) {
+                put5(out, player_color(g_save.col2));
+            } else {
+                c[0] = gbc_obj_pals[p][i][0] >> 3;
+                c[1] = gbc_obj_pals[p][i][1] >> 3;
+                c[2] = gbc_obj_pals[p][i][2] >> 3;
+                put5(out, c);
+            }
         }
     g_pal_dirty |= 2;
+}
+
+void pal_garage(void) BANKED
+{
+    uint8_t p, i, c[3];
+    uint8_t *out = (uint8_t *)g_bgpal;
+    pal_menu(8);
+    /* palette 0: the icons in the player's colours, 1..5 three colours
+     * to choose from each (colour 0 is the menu's background) */
+    for (p = 0; p < 6; p++) {
+        out[0] = ((uint8_t *)g_bgpal)[PAL_TEXT * 8];
+        out[1] = ((uint8_t *)g_bgpal)[PAL_TEXT * 8 + 1];
+        for (i = 1; i < 4; i++) {
+            uint8_t k = (uint8_t)(3 * (p - 1) + i - 1);
+            if (!p) {
+                if (i == 3) {
+                    c[0] = gbc_obj_pals[0][3][0] >> 3;
+                    c[1] = gbc_obj_pals[0][3][1] >> 3;
+                    c[2] = gbc_obj_pals[0][3][2] >> 3;
+                    put5(out + 2 * i, c);
+                } else {
+                    put5(out + 2 * i, player_color(i == 1 ? g_save.col1 : g_save.col2));
+                }
+            } else if (k < PLAYER_COLOR_COUNT) {
+                put5(out + 2 * i, gbc_player_colors[k]);
+            } else {
+                out[2 * i] = out[0];
+                out[2 * i + 1] = out[1];
+            }
+        }
+        out += 8;
+    }
+    g_pal_dirty |= 1;
 }

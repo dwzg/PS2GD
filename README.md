@@ -1,9 +1,9 @@
 # Pulse Dash
 
-A rhythm platformer for the **PlayStation 2** and the **PSP**, inspired by
-Geometry Dash: tap to jump, hold to fly, and get through each level in one
-go, in time with the music. There is also a
-[Game Boy Color demo](#game-boy-color-demo) of the core game.
+A rhythm platformer for the **PlayStation 2**, the **PSP** and the
+[**Game Boy Color**](#game-boy-color), inspired by Geometry Dash: tap to
+jump, hold to fly, and get through each level in one go, in time with the
+music.
 
 ![Title screen](docs/screenshots/title.png)
 
@@ -63,19 +63,21 @@ an unofficial fan project, not affiliated with or endorsed by RobTop Games;
 On the PSP the analog nub works like the d-pad, and HOME > Quit saves any
 unsaved progress before the game exits.
 
-## Game Boy Color demo
+## Game Boy Color
 
-![Title, level select, the six levels and the results on a Game Boy Color](docs/screenshots/gbc.png)
+![The title over its demo run, the garage, the level select, five levels and the results on a Game Boy Color](docs/screenshots/gbc.png)
 
-The core game on a Game Boy Color: all six levels with every vehicle, orb,
-pad and portal, the same physics to the tick (a fixed-point port checked
-against the original's), each level's song arranged for the four sound
-channels, palette changes and the beat flash, practice mode, coins and
-saves, at the full frame rate. It leaves out the garage, the options, the
-live title screen and the other versions' effects. `pulsedash.gbc` runs in
-any Game Boy Color emulator, or on a GBC or GBA with a flash cartridge
-(A/Up jumps, Start pauses, B and Select place and remove practice
-checkpoints). CI builds it on every push (artifact `pulsedash-gbc`), or:
+The game on a Game Boy Color: all six levels with every vehicle, orb, pad
+and portal, the same physics and rules to the tick (the shared physics
+rewritten for its 8-bit CPU, checked against the original on every tick),
+each level's song arranged for the four sound channels, palette changes
+and the beat flash, practice mode, coins, the garage's icons and colours,
+the title screen over the game playing itself on the beat, and saves, at
+the full frame rate. It leaves out the options and the other versions'
+effects. `pulsedash.gbc` runs in any Game Boy Color emulator, or on a GBC
+or GBA with a flash cartridge (A/Up jumps, Start pauses, B and Select place
+and remove practice checkpoints). Releases carry it; CI builds it on every
+push (artifact `pulsedash-gbc`), or:
 
 ```sh
 scripts/build-gbc.sh          # -> build/gbc/pulsedash.gbc (needs SDCC 4.2 and SDL2)
@@ -158,7 +160,7 @@ build/host/pulsedash
 `pd_tool menu` take an output width, so `... menu title out.png 1 480` shows
 a screen exactly as the PSP draws it.
 
-Game Boy Color demo: `scripts/build-gbc.sh` (see
+Game Boy Color: `scripts/build-gbc.sh` (see
 [docs/GBC_PORT.md](docs/GBC_PORT.md)).
 
 GitHub Actions builds the ELF, the EBOOT and the Game Boy Color ROM
@@ -168,7 +170,7 @@ GitHub Actions builds the ELF, the EBOOT and the Game Boy Color ROM
 
 Describe the version in [CHANGELOG.md](CHANGELOG.md) (a `## [1.1.0] - date`
 section), then push a version tag; CI publishes a GitHub release once the
-tests and the PS2 and PSP builds pass:
+tests and the PS2, PSP and Game Boy Color builds pass:
 
 ```sh
 git tag v1.1.0
@@ -177,7 +179,8 @@ git push origin v1.1.0
 
 The release carries `PULSEDASH.ELF`, a zip with it plus the README,
 changelog and licenses, a PSP zip (`PSP/GAME/PulseDash/` with the EBOOT and
-the same documents) and `SHA256SUMS`. Its notes are the
+the same documents), the Game Boy Color ROM (`pulsedash-<version>.gbc`, and
+a zip with it, the same documents and `docs/GBC_PORT.md`) and `SHA256SUMS`. Its notes are the
 version's changelog section followed by the merged pull requests. Tags with
 a hyphen (`v1.1.0-rc1`) become pre-releases.
 
@@ -189,7 +192,7 @@ make -f Makefile.host test-full   # also proves levels beatable at 30 and 20 Hz 
 scripts/emu-test.sh               # run the real PS2 ELF in the Play! core, headless
 scripts/psp-emu-test.sh           # run the real PSP EBOOT in PPSSPP, headless
 make -f Makefile.host PSP=1 test  # the same tests in the PSP's widescreen layout
-build/host/gbc_tool solve         # Game Boy Color: the levels with its physics (also: rhythm)
+build/host/gbc_tool difftest      # Game Boy Color: its physics gives the same results, tick for tick
 python3 scripts/gbc-emu-test.py   # play all six levels in the GBC ROM in PyBoy, headless
 ```
 
@@ -250,12 +253,16 @@ inside the exit callback (the system powers down when it returns), so the
 callback waits for the loop to write the save before it exits the game.
 Quitting saves, and the next boot loads it, in that test.
 
-The Game Boy Color demo has its own checks, described in
-[docs/GBC_PORT.md](docs/GBC_PORT.md): `gbc_tool solve` and `rhythm` run the
-solver on its fixed-point physics, and `scripts/gbc-emu-test.py` plays each
+The physics is integer arithmetic (`src/core/sim.c`, its numbers in
+`src/core/sim_rules.h`), so it gives the same results on every platform and
+the solver's proofs hold for all of them. The Game Boy Color has its own
+faster version of it; `gbc_tool difftest` plays every level with both side
+by side (the solver's run and thousands of runs leaving it) and fails on
+the first tick they differ, and `scripts/gbc-emu-test.py` plays each
 level's solution in the ROM in [PyBoy](https://github.com/Baekalfen/PyBoy),
-failing unless it finishes on the same tick as on the PC and every frame is
-on time.
+failing unless the player is where the reference puts it on every tick and
+every frame is on time. See [docs/PORTING.md](docs/PORTING.md) for how the
+code is shared between platforms, and [docs/GBC_PORT.md](docs/GBC_PORT.md).
 
 ## Making levels
 
@@ -267,18 +274,20 @@ level, in `src/core/demo.c`.
 ## Layout
 
 ```
-src/core/     portable game: physics (sim.c), levels, rendering, menus,
-              synth + songs, saves. Plain C99, single-precision floats only.
+src/core/     portable game: physics (sim.c, integers only, its rules in
+              sim_rules.h), levels, rendering, menus, synth + songs, saves.
+              Plain C99, single-precision floats only.
               PD_PSP selects the PSP's widescreen layout (common.h).
 src/levels/   the six levels
 src/ps2/      PS2 frontend: gsKit renderer, audsrv streaming thread,
               libpad, libmc saves + browser icon, boot/module loading
 src/psp/      PSP frontend: GU renderer, SRC audio thread, sceCtrl input,
               memory stick saves, XMB icon and background
-src/host/     SDL2 frontend and pd_tool (solver, screenshots, WAV export);
+src/host/     SDL2 frontend and pd_tool (screenshots, WAV export, level
+              checks); the level solver both tools use (solver.c);
               gbc_tool, which makes the Game Boy Color ROM's data
-src/gbc/      Game Boy Color demo (GBDK-2020): fixed-point physics, streaming
-              background, sprites, the four-channel music player
+src/gbc/      Game Boy Color version (GBDK-2020): the physics for its 8-bit CPU,
+              streaming background, sprites, the four-channel music player
 tools/play-harness/   PS2 emulator test harness (used by scripts/emu-test.sh)
 tools/ppsspp-harness/ PSP emulator test hooks (used by scripts/psp-emu-test.sh)
 tools/beat_align.py   moves a level's obstacles onto the beat of its song
@@ -293,9 +302,10 @@ and on PC. Not yet tried in PCSX2.
 The PSP version runs in PPSSPP (rendering, controls, audio streaming, memory
 stick save/load, HOME > Quit); it has not been tried on a real PSP yet.
 
-The Game Boy Color demo runs in PyBoy (all six levels played through,
-practice checkpoints, pause, saves); it has not been tried on a real Game
-Boy Color or in other emulators yet.
+The Game Boy Color version runs on a Game Boy Advance (in its Game Boy Color
+mode, from a flash cartridge) and in PyBoy (all six levels played through,
+practice checkpoints, pause, saves); it has not been tried on a Game Boy
+Color itself or in other emulators yet.
 
 ## License
 

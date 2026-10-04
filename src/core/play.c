@@ -23,8 +23,7 @@ unsigned play_attempts_started(void)
 
 static int level_percent(const PlayState *ps)
 {
-    int pc = (int)(ps->p.x / ps->L->end_x * 100.0f);
-    return clampi(pc, 0, 100);
+    return progress_percent(ps->p.x, (uint16_t)ps->L->width);
 }
 
 static void snapshot_take(const PlayState *ps, PlaySnapshot *s)
@@ -47,8 +46,8 @@ static void snap_prev(PlayState *ps)
 {
     ps->prev_cam_x = ps->cam_x;
     ps->prev_cam_y = ps->cam_y;
-    ps->prev_x = ps->p.x;
-    ps->prev_y = ps->p.y;
+    ps->prev_x = sim_x(&ps->p);
+    ps->prev_y = sim_y(&ps->p);
     ps->prev_rot = ps->rot;
     ps->prev_angle = ps->vis_angle;
 }
@@ -90,17 +89,16 @@ static void begin_attempt(PlayState *ps, const PlaySnapshot *from)
         ps->pal_t = 1.0f;
         ps->trig_idx = 0;
     }
-    ps->cam_x = ps->p.x - CAM_PLAYER_X;
+    ps->cam_x = sim_x(&ps->p) - CAM_PLAYER_X;
     snap_prev(ps);
     ps->phase = PH_RUN;
     ps->phase_t = 0.0f;
     ps->attempt++;
     s_attempts_started++;
     ps->attempt_time = 0.0f;
+    progress_attempt(&g->save.progress, (uint8_t)ps->level_idx, (uint8_t)ps->practice);
     if (!ps->practice) {
         audio_play_song(SONG_FIRST_LEVEL + ps->L->song, 0.0f);
-        if (ps->level_idx < SAVE_MAX_LEVELS) g->save.attempts[ps->level_idx]++;
-        g->save.total_attempts++;
         g->save_dirty = 1;
     }
 }
@@ -148,25 +146,20 @@ static void on_death(PlayState *ps)
 
     Color c1 = g_player_colors[g->save.col1 % PLAYER_COLOR_COUNT];
     Color c2 = g_player_colors[g->save.col2 % PLAYER_COLOR_COUNT];
-    fx_burst(FX_WORLD, ps->p.x, ps->p.y, 14, 9.0f, 0.32f, 0.9f, c1, 0);
-    fx_burst(FX_WORLD, ps->p.x, ps->p.y, 10, 7.0f, 0.25f, 0.8f, c2, 0);
-    fx_burst(FX_WORLD, ps->p.x, ps->p.y, 12, 11.0f, 0.18f, 0.6f, COL_WHITE, 1);
-    fx_ring(FX_WORLD, ps->p.x, ps->p.y, 0.3f, 3.2f, 0.5f, col_with_alpha(COL_WHITE, 0.9f));
+    float px = sim_x(&ps->p), py = sim_y(&ps->p);
+    fx_burst(FX_WORLD, px, py, 14, 9.0f, 0.32f, 0.9f, c1, 0);
+    fx_burst(FX_WORLD, px, py, 10, 7.0f, 0.25f, 0.8f, c2, 0);
+    fx_burst(FX_WORLD, px, py, 12, 11.0f, 0.18f, 0.6f, COL_WHITE, 1);
+    fx_ring(FX_WORLD, px, py, 0.3f, 3.2f, 0.5f, col_with_alpha(COL_WHITE, 0.9f));
 
-    int pc = mini(level_percent(ps), 99);
-    g->save.total_jumps += (uint32_t)ps->p.jumps;
     ps->jumps_session += ps->p.jumps;
     ps->time_session += ps->attempt_time;
-    if (ps->level_idx < SAVE_MAX_LEVELS) {
-        uint8_t *best = ps->practice ? &g->save.best_practice[ps->level_idx] : &g->save.best[ps->level_idx];
-        if (pc > *best) {
-            *best = (uint8_t)pc;
-            g->save_dirty = 1;
-            if (!ps->practice) {
-                ps->best_popup_t = 2.0f;
-                ps->best_popup_val = pc;
-            }
-        }
+    int best = progress_death(&g->save.progress, (uint8_t)ps->level_idx, (uint8_t)ps->practice,
+                              (uint8_t)level_percent(ps), ps->p.jumps);
+    g->save_dirty = 1;
+    if (best) {
+        ps->best_popup_t = 2.0f;
+        ps->best_popup_val = best;
     }
 }
 
@@ -178,23 +171,12 @@ static void on_complete(PlayState *ps)
     ps->results_sel = 0;
     ps->flash = 0.8f;
     audio_sfx(SFX_COMPLETE);
-    g->save.total_jumps += (uint32_t)ps->p.jumps;
     ps->jumps_session += ps->p.jumps;
     ps->time_session += ps->attempt_time;
-    ps->new_best = 0;
-    ps->coins_gained = 0;
-    if (ps->level_idx < SAVE_MAX_LEVELS) {
-        if (ps->practice) {
-            g->save.best_practice[ps->level_idx] = 100;
-        } else {
-            if (g->save.best[ps->level_idx] < 100) ps->new_best = 1;
-            g->save.best[ps->level_idx] = 100;
-            uint8_t before = g->save.coins[ps->level_idx];
-            g->save.coins[ps->level_idx] |= ps->p.coins;
-            ps->coins_gained = g->save.coins[ps->level_idx] & (uint8_t)~before;
-        }
-        g->save_dirty = 1;
-    }
+    uint8_t first;
+    ps->coins_gained = progress_complete(&g->save.progress, (uint8_t)ps->level_idx, (uint8_t)ps->practice, ps->p.coins,
+                                         ps->p.jumps, &first);
+    ps->new_best = first;
     save_store(&g->save);
     g->save_dirty = 0;
 }
@@ -206,7 +188,7 @@ static void add_checkpoint(PlayState *ps)
         ps->ncp = MAX_CHECKPOINTS - 1;
     }
     snapshot_take(ps, &ps->cp[ps->ncp++]);
-    fx_ring(FX_WORLD, ps->p.x, ps->p.y, 0.2f, 1.6f, 0.4f, RGB(80, 255, 120));
+    fx_ring(FX_WORLD, sim_x(&ps->p), sim_y(&ps->p), 0.2f, 1.6f, 0.4f, RGB(80, 255, 120));
     audio_sfx(SFX_CHECKPOINT);
 }
 
@@ -215,21 +197,22 @@ static void add_checkpoint(PlayState *ps)
 static void update_camera(PlayState *ps, float dt)
 {
     const Player *p = &ps->p;
+    const float px = sim_x(p), py = sim_y(p);
     if (ps->phase != PH_COMPLETE) {
-        ps->cam_x = p->x - CAM_PLAYER_X;
+        ps->cam_x = px - CAM_PLAYER_X;
     } else {
         /* past the finish the camera glides to a stop from the speed it had
          * (stopping dead in one tick looks like a hitch) */
         const float k = 5.0f;
-        float stop = ps->L->end_x - CAM_PLAYER_X + p->speed / k;
+        float stop = ps->L->end_x - CAM_PLAYER_X + sim_speed(p) / k;
         ps->cam_x += (stop - ps->cam_x) * (1.0f - expf(-dt * k));
     }
 
     float k;
     if (p->mode == MODE_CUBE) {
         float lo = ps->cam_target_y + 2.6f, hi = ps->cam_target_y + VIEW_H - 4.2f;
-        if (p->y > hi) ps->cam_target_y = p->y - (VIEW_H - 4.2f);
-        if (p->y < lo) ps->cam_target_y = p->y - 2.6f;
+        if (py > hi) ps->cam_target_y = py - (VIEW_H - 4.2f);
+        if (py < lo) ps->cam_target_y = py - 2.6f;
         if (ps->cam_target_y < CAM_GROUND_Y) ps->cam_target_y = CAM_GROUND_Y;
         k = 1.0f - expf(-dt * 5.0f);
         ps->corr_alpha = approachf(ps->corr_alpha, 0.0f, dt * 3.0f);
@@ -246,7 +229,7 @@ static void update_camera(PlayState *ps, float dt)
 static void update_palette(PlayState *ps, float dt)
 {
     const Level *L = ps->L;
-    while (ps->trig_idx < L->ntrig && ps->p.x >= L->trig[ps->trig_idx].x) {
+    while (ps->trig_idx < L->ntrig && sim_x(&ps->p) >= L->trig[ps->trig_idx].x) {
         palette_lerp(&ps->pal, &g_palettes[ps->pal_from], &g_palettes[ps->pal_to], smoothstepf(ps->pal_t));
         /* start a new blend from the current target */
         ps->pal_from = ps->pal_to;
@@ -258,17 +241,21 @@ static void update_palette(PlayState *ps, float dt)
     palette_lerp(&ps->pal, &g_palettes[ps->pal_from], &g_palettes[ps->pal_to], smoothstepf(ps->pal_t));
 }
 
-static void update_visuals(PlayState *ps, float dt)
+/* The player's rotation and tilt, and the trail and exhaust behind it.
+ * Past the finish (finished) a cube lands its spin on a side as on the
+ * ground. */
+static void update_motion(PlayState *ps, float dt, int finished)
 {
     Game *g = &g_game;
     Player *p = &ps->p;
+    const float px = sim_x(p), py = sim_y(p), vy = sim_vy(p), speed = sim_speed(p);
     float gdir = (float)p->grav;
     Color c1 = g_player_colors[g->save.col1 % PLAYER_COLOR_COUNT];
     Color c2 = g_player_colors[g->save.col2 % PLAYER_COLOR_COUNT];
 
     switch (p->mode) {
     case MODE_CUBE:
-        if (p->grounded) {
+        if (p->grounded || finished) {
             float q = PI * 0.5f;
             float target = roundf(ps->rot / q) * q;
             ps->rot = approachf(ps->rot, target, dt * 18.0f);
@@ -278,18 +265,18 @@ static void update_visuals(PlayState *ps, float dt)
         ps->vis_angle = 0.0f;
         break;
     case MODE_BALL:
-        ps->rot += p->speed / 0.45f * dt * gdir;
+        ps->rot += speed / 0.45f * dt * gdir;
         break;
     case MODE_SHIP: {
-        float target = -atan2f(p->vy, p->speed * 1.6f);
+        float target = -atan2f(vy, speed * 1.6f);
         ps->vis_angle = lerpf(ps->vis_angle, target, 1.0f - expf(-dt * 14.0f));
         break;
     }
     case MODE_UFO:
-        ps->vis_angle = lerpf(ps->vis_angle, clampf(-p->vy * 0.02f, -0.3f, 0.3f), 1.0f - expf(-dt * 10.0f));
+        ps->vis_angle = lerpf(ps->vis_angle, clampf(-vy * 0.02f, -0.3f, 0.3f), 1.0f - expf(-dt * 10.0f));
         break;
     case MODE_WAVE:
-        ps->vis_angle = -atan2f(p->vy, p->speed);
+        ps->vis_angle = -atan2f(vy, speed);
         break;
     }
 
@@ -297,16 +284,16 @@ static void update_visuals(PlayState *ps, float dt)
     if (ps->trail_n < TRAIL_LEN) ps->trail_n++;
     memmove(&ps->trail_x[1], &ps->trail_x[0], sizeof(float) * (TRAIL_LEN - 1));
     memmove(&ps->trail_y[1], &ps->trail_y[0], sizeof(float) * (TRAIL_LEN - 1));
-    ps->trail_x[0] = p->x;
-    ps->trail_y[0] = p->y;
+    ps->trail_x[0] = px;
+    ps->trail_y[0] = py;
     if (p->mode != MODE_WAVE && p->mode != MODE_SHIP) ps->trail_n = mini(ps->trail_n, 1);
 
     /* ground dust */
     ps->ground_fx_tick++;
     if ((p->mode == MODE_CUBE || p->mode == MODE_BALL) && p->grounded && (ps->ground_fx_tick % 3) == 0) {
         Particle *q = fx_spawn(FX_WORLD);
-        q->x = p->x - 0.45f;
-        q->y = p->y - 0.45f * gdir;
+        q->x = px - 0.45f;
+        q->y = py - 0.45f * gdir;
         q->vx = -2.0f - (ps->ground_fx_tick % 7) * 0.3f;
         q->vy = (1.0f + (ps->ground_fx_tick % 5) * 0.4f) * gdir;
         q->life = q->max_life = 0.35f;
@@ -317,8 +304,8 @@ static void update_visuals(PlayState *ps, float dt)
     if (p->mode == MODE_SHIP || p->mode == MODE_UFO) {
         Particle *q = fx_spawn(FX_WORLD);
         float back = p->mode == MODE_SHIP ? 0.55f : 0.0f;
-        q->x = p->x - back * cosf(ps->vis_angle);
-        q->y = p->y + (p->mode == MODE_UFO ? -0.25f * gdir : back * sinf(ps->vis_angle));
+        q->x = px - back * cosf(ps->vis_angle);
+        q->y = py + (p->mode == MODE_UFO ? -0.25f * gdir : back * sinf(ps->vis_angle));
         q->vx = -3.0f;
         q->vy = (p->mode == MODE_UFO ? -1.5f * gdir : 0.0f);
         q->life = q->max_life = 0.3f;
@@ -327,6 +314,16 @@ static void update_visuals(PlayState *ps, float dt)
         q->c = col_with_alpha(c2, 0.9f);
         q->add = 1;
     }
+}
+
+static void update_visuals(PlayState *ps, float dt)
+{
+    Player *p = &ps->p;
+    const float px = sim_x(p), py = sim_y(p);
+    float gdir = (float)p->grav;
+    Color c1 = g_player_colors[g_game.save.col1 % PLAYER_COLOR_COUNT];
+
+    update_motion(ps, dt, 0);
 
     /* event effects */
     if (p->events & (EV_ORB | EV_PAD | EV_PORTAL | EV_COIN | EV_SPEED)) {
@@ -344,7 +341,7 @@ static void update_visuals(PlayState *ps, float dt)
         }
     }
     if (p->events & EV_LAND && p->mode == MODE_CUBE) {
-        fx_burst(FX_WORLD, p->x, p->y - 0.5f * gdir, 4, 3.0f, 0.12f, 0.25f, col_with_alpha(c1, 0.8f), 0);
+        fx_burst(FX_WORLD, px, py - 0.5f * gdir, 4, 3.0f, 0.12f, 0.25f, col_with_alpha(c1, 0.8f), 0);
     }
 
     ps->shake = maxf(0.0f, ps->shake - dt);
@@ -386,7 +383,7 @@ static void pause_tick(PlayState *ps)
     case 1: /* restart */
         ps->paused = 0;
         audio_pause(0);
-        if (ps->phase == PH_RUN) on_death(ps);
+        if (ps->phase == PH_RUN && ps->p.ticks > PROGRESS_LEFT_TICKS) on_death(ps); /* counts as one */
         ps->ncp = 0;
         if (ps->practice) audio_play_song(SONG_PRACTICE, 0.0f);
         begin_attempt(ps, NULL);
@@ -403,7 +400,7 @@ static void pause_tick(PlayState *ps)
     default: /* exit */
         ps->paused = 0;
         audio_pause(0);
-        if (ps->phase == PH_RUN && ps->attempt_time > 0.5f) on_death(ps);
+        if (ps->phase == PH_RUN && ps->p.ticks > PROGRESS_LEFT_TICKS) on_death(ps);
         screen_go(SCR_SELECT);
         break;
     }
@@ -455,8 +452,10 @@ void play_tick(void)
         break;
     case PH_COMPLETE: {
         ps->phase_t += dt;
-        Player *p = &ps->p;
-        p->x += p->speed * dt;
+        /* (until it is off the screen: on and on, x would overflow) */
+        if (sim_x(&ps->p) < ps->cam_x + SCREEN_W / BLOCK_PX + 4.0f)
+            sim_coast(&ps->p, (uint16_t)lroundf(ps->phase_t * 60.0f));
+        update_motion(ps, dt, 1);
         if (ps->phase_t > 0.3f && ps->phase_t < 3.5f && ((int)(ps->phase_t * 60.0f) % 14) == 0) spawn_firework(ps);
         ps->flash = maxf(0.0f, ps->flash - dt * 1.5f);
         if (ps->phase_t > 1.6f) {
@@ -538,7 +537,7 @@ static void draw_player(const PlayState *ps, const View *v, const Pose *pose)
 
 static void draw_hud(const PlayState *ps)
 {
-    float frac = ps->p.x / ps->L->end_x;
+    float frac = sim_x(&ps->p) / ps->L->end_x;
     if (ps->phase == PH_COMPLETE) frac = 1.0f;
     float x0 = UI_X(180), x1 = UI_X(440);
     render_progress_bar(x0, 14, x1, 24, frac, RGB(90, 255, 120), RGB(255, 255, 255));
@@ -587,13 +586,13 @@ static void draw_pause(const PlayState *ps)
     char buf[48];
     float ty = font_center_y(130, 142, 2.0f); /* text beside the bars */
     font_draw(UI_X(150), ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
-    render_progress_bar(UI_X(250), 130, UI_X(440), 142, g->save.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
-    snprintf(buf, sizeof(buf), "%d%%", g->save.best[idx]);
+    render_progress_bar(UI_X(250), 130, UI_X(440), 142, g->save.progress.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
+    snprintf(buf, sizeof(buf), "%d%%", g->save.progress.best[idx]);
     font_draw(UI_X(452), ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     ty = font_center_y(156, 168, 2.0f);
     font_draw(UI_X(150), ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
-    render_progress_bar(UI_X(250), 156, UI_X(440), 168, g->save.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
-    snprintf(buf, sizeof(buf), "%d%%", g->save.best_practice[idx]);
+    render_progress_bar(UI_X(250), 156, UI_X(440), 168, g->save.progress.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
+    snprintf(buf, sizeof(buf), "%d%%", g->save.progress.best_practice[idx]);
     font_draw(UI_X(452), ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
 
     const char *items[4] = {"RESUME", "RESTART", ps->practice ? "NORMAL MODE" : "PRACTICE MODE", "EXIT LEVEL"};
@@ -637,7 +636,7 @@ static void draw_results(const PlayState *ps)
 
     /* coins */
     int n = ps->L->ncoins;
-    uint8_t have = ps->level_idx < SAVE_MAX_LEVELS ? g->save.coins[ps->level_idx] : 0;
+    uint8_t have = ps->level_idx < SAVE_MAX_LEVELS ? g->save.progress.coins[ps->level_idx] : 0;
     for (int i = 0; i < n; i++) {
         float cx = SCREEN_W / 2 + (i - (n - 1) * 0.5f) * 50;
         int got = (have >> i) & 1;
@@ -664,7 +663,7 @@ static void draw_results(const PlayState *ps)
 static Pose make_pose(const PlayState *ps)
 {
     const float a = g_game.alpha;
-    Pose pose = {lerpf(ps->prev_x, ps->p.x, a), lerpf(ps->prev_y, ps->p.y, a), lerpf(ps->prev_rot, ps->rot, a),
+    Pose pose = {lerpf(ps->prev_x, sim_x(&ps->p), a), lerpf(ps->prev_y, sim_y(&ps->p), a), lerpf(ps->prev_rot, ps->rot, a),
                  lerpf(ps->prev_angle, ps->vis_angle, a)};
     return pose;
 }
@@ -697,7 +696,7 @@ void play_end_tick(PlayState *ps)
 void play_place(PlayState *ps)
 {
     reset_visuals(ps);
-    ps->cam_x = ps->p.x - CAM_PLAYER_X;
+    ps->cam_x = sim_x(&ps->p) - CAM_PLAYER_X;
     ps->cam_y = ps->cam_target_y = CAM_GROUND_Y;
     ps->phase = PH_RUN;
     snap_prev(ps);
@@ -729,13 +728,13 @@ void play_render(void)
         if (ax > -400) font_draw_fancy(ax, ay, 4.0f, COL_WHITE, RGB(210, 225, 255), RGB(0, 0, 0), 3.0f, ALIGN_LEFT, buf);
     }
 
-    uint8_t saved = ps->level_idx < SAVE_MAX_LEVELS ? g->save.coins[ps->level_idx] : 0;
+    uint8_t saved = ps->level_idx < SAVE_MAX_LEVELS ? g->save.progress.coins[ps->level_idx] : 0;
     render_level(&v, ps->L, &ps->p, saved);
 
     /* practice checkpoints */
     if (ps->practice) {
         for (int i = 0; i < ps->ncp; i++) {
-            float cx = view_sx(&v, ps->cp[i].p.x), cy = view_sy(&v, ps->cp[i].p.y);
+            float cx = view_sx(&v, sim_x(&ps->cp[i].p)), cy = view_sy(&v, sim_y(&ps->cp[i].p));
             if (cx < -20 || cx > SCREEN_W + 20) continue;
             float d = 11.0f;
             float xy[8] = {cx, cy - d - 3, cx + d + 3, cy, cx, cy + d + 3, cx - d - 3, cy};

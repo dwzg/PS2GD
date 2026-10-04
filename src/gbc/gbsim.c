@@ -1,9 +1,10 @@
 /*
- * Fixed-point port of src/core/sim.c; see gbsim.h. The functions follow the
- * float version one for one, so a change there should be mirrored here
- * (gbc_tool solve then checks the levels against this code).
+ * The player's physics for the Game Boy Color; see gbsim.h. The functions
+ * follow src/core/sim.c, the reference, one for one, so a change there must
+ * be mirrored here (gbc_tool difftest checks that both give the same
+ * results).
  *
- * Written for the Game Boy's CPU as much as for a PC: it has no multiply,
+ * Written for the Game Boy's CPU: it has no multiply,
  * 8-bit registers, and SDCC turns a 32-bit comparison into some 85
  * instructions. So the player and the boxes being tested are globals, and
  * the box tests compare a position with "cell + constant" split into whole
@@ -18,7 +19,7 @@
 GsPlayer gs_p;
 
 #define P gs_p
-#define ONE 65536L
+#define ONE SIM_ONE
 
 /* The whole blocks and 1/65536 of the player's x and y (16.16), read and
  * written as 16-bit halves: SDCC's 32-bit shifts and compares are slow. */
@@ -38,43 +39,12 @@ GsPlayer gs_p;
 #define SET_Y(hi, lo) (P.y = (int32_t)((uint32_t)(uint16_t)(hi) << 16 | (uint16_t)(lo)))
 #endif
 
-/* Speed portals 0..3: 8.4, 10.5, 13.125, 15.75 blocks per second. */
-const uint16_t GS_SPEEDS[4] = {2293, 2867, 3584, 4300};
-/* The float version's step, speed * h as a float32, in 1/65536 of a unit
- * on top of GS_SPEEDS (they are exact: 0.035, 0.043750003, 0.054687504,
- * 0.065625004 blocks). */
-static const uint16_t SPEED_LO[4] = {49808, 13120, 16, 52448};
-
-/* Accelerations (per sub-step, per sub-step) and velocities (per sub-step)
- * of src/core/sim.c, in 1/65536 blocks. */
-#define CUBE_GRAV 108     /* 95 blocks/s^2 */
-#define CUBE_JUMP 5707    /* 20.9 blocks/s */
-#define CUBE_MAXFALL 7100 /* 26 */
-
-#define SHIP_UP 66 /* 58 */
-#define SHIP_DOWN 55 /* 48 */
-#define SHIP_MAXRISE 2348 /* 8.6 */
-#define SHIP_MAXFALL 2731 /* 10 */
-
-#define BALL_GRAV 93 /* 82 */
-#define BALL_KICK 1638 /* 6 */
-#define BALL_MAXFALL 6554 /* 24 */
-
-#define UFO_GRAV 71 /* 62 */
-#define UFO_JUMP 3495 /* 12.8 */
-#define UFO_MAXFALL 4369 /* 16 */
-
-/* Orb and pad launch speeds for cube, ship, ball and UFO (the float
- * version scales CUBE_JUMP by 1, 0.62, 0.75 and 0.8 for the mode). */
-static const int16_t ORB_YELLOW_V[4] = {5707, 3538, 4280, 4566}; /* x1 */
-static const int16_t ORB_PINK_V[4] = {4109, 2548, 3082, 3287};   /* x0.72 */
-static const int16_t PAD_YELLOW_V[4] = {7990, 4954, 5992, 6392}; /* x1.4 */
-static const int16_t PAD_PINK_V[4] = {4908, 3043, 3681, 3926};   /* x0.86 */
-#define ORB_BLUE_V 2854 /* CUBE_JUMP * 0.5 */
-#define PAD_BLUE_V 3424 /* CUBE_JUMP * 0.6 */
-
-#define SNAP_EPS 1311  /* 0.02 */
-#define OVERLAP_EPS 66 /* 0.001 */
+static const uint16_t SPEED_HI[4] = SIM_SPEED_HI;
+static const uint16_t SPEED_LO[4] = SIM_SPEED_LO;
+static const int16_t ORB_YELLOW_V[4] = SIM_ORB_YELLOW_V;
+static const int16_t ORB_PINK_V[4] = SIM_ORB_PINK_V;
+static const int16_t PAD_YELLOW_V[4] = SIM_PAD_YELLOW_V;
+static const int16_t PAD_PINK_V[4] = SIM_PAD_PINK_V;
 
 /* 1 << n */
 static const uint16_t BIT[16] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
@@ -249,15 +219,17 @@ static void at_cell(void)
 /* Does the box overlap the box (x0, y0)-(x1, y1) of the cell at_cell set?
  * As the float version's a.x0 < b.x1 - eps && a.x1 > b.x0 + eps && the
  * same in y, with the constants worked out by the compiler. */
-#define BOX(x0, y0, x1, y1)                                                                                \
-    (LT(dx0, mx0f, (x1) - OVERLAP_EPS) && GT(dx1, mx1f, (x0) + OVERLAP_EPS) && LT(dy0, my0f, (y1) - OVERLAP_EPS) && \
-     GT(dy1, my1f, (y0) + OVERLAP_EPS))
+#define BOX(x0, y0, x1, y1)                                                                              \
+    (LT(dx0, mx0f, (x1) - SIM_OVERLAP_EPS) && GT(dx1, mx1f, (x0) + SIM_OVERLAP_EPS) &&                     \
+     LT(dy0, my0f, (y1) - SIM_OVERLAP_EPS) && GT(dy1, my1f, (y0) + SIM_OVERLAP_EPS))
+/* ... one of sim_rules.h's boxes */
+#define OBJ_BOX(box) BOX(box)
 
 static uint8_t box_solid(uint8_t kind)
 {
     switch (kind) {
-    case GT_BLOCK: return BOX(0L, 0L, ONE, ONE);
-    case GT_SLAB_LO: return BOX(0L, 0L, ONE, ONE / 2);
+    case OBJ_BLOCK: return BOX(0L, 0L, ONE, ONE);
+    case OBJ_SLAB_LO: return BOX(0L, 0L, ONE, ONE / 2);
     default: return BOX(0L, ONE / 2, ONE, ONE);
     }
 }
@@ -374,10 +346,10 @@ static uint16_t rows_of(int16_t lo, int16_t hi)
 
 /* Hitbox half extents (16.16) by mode: cube, ship, ball, UFO, wave. The
  * outer box touches solids and objects, the inner one kills in a solid. */
-static const uint16_t HIT_W[5] = {32768, 29491, 29491, 29491, 10486};  /* 0.5, 0.45, 0.45, 0.45, 0.16 */
-static const uint16_t HIT_H[5] = {32768, 19661, 29491, 24904, 10486};  /* 0.5, 0.30, 0.45, 0.38, 0.16 */
-static const uint16_t INNER_W[5] = {11796, 9830, 10486, 10486, 6554}; /* 0.18, 0.15, 0.16, 0.16, 0.10 */
-static const uint16_t INNER_H[5] = {11796, 7864, 9830, 9830, 6554};   /* 0.18, 0.12, 0.15, 0.15, 0.10 */
+static const uint16_t HIT_W[MODE_COUNT] = SIM_HIT_W;
+static const uint16_t HIT_H[MODE_COUNT] = SIM_HIT_H;
+static const uint16_t INNER_W[MODE_COUNT] = SIM_INNER_W;
+static const uint16_t INNER_H[MODE_COUNT] = SIM_INNER_H;
 
 void gs_hitbox(uint16_t *hw, uint16_t *hh) GS_BANKED
 {
@@ -407,121 +379,33 @@ void gs_reset(uint8_t start_speed) GS_BANKED
     for (i = 0; i < sizeof(P); i++) b[i] = 0;
     P.y = ONE / 2;
     P.grav = 1;
-    P.mode = GM_CUBE;
+    P.mode = MODE_CUBE;
     P.speed_idx = start_speed > 3 ? 3 : start_speed;
-    P.speed = GS_SPEEDS[P.speed_idx];
+    P.speed = SPEED_HI[P.speed_idx];
     P.grounded = 1;
     P.floor_y = 0;
-    P.ceil_y = GS_CORRIDOR;
+    P.ceil_y = SIM_CORRIDOR;
 }
 
 /* --- moving forwards --- */
 
-/*
- * x += speed * h, exactly as the float version's float32 x moves: the sum
- * is rounded to 24 significant bits (to nearest, ties to even), so the
- * further into the level, the coarser each step. That adds up to several
- * hundredths of a block, and the levels were checked on the float version
- * down to thousandths (a spike cleared by 0.001 block when pressing two
- * ticks early), so the Game Boy moves the same. x and xfrac together are
- * x in 1/2^32 blocks, which holds every float32 x past 1/512 block exactly.
- *
- * Between powers of two the rounded step is the same every time (x is a
- * multiple of its precision there, and none of the four steps is ever a
- * tie), so it is worked out once per power of two and speed.
- */
-
-/* (*x, *xf) += the exact step, rounded to 24 significant bits */
-static void add_round(uint32_t *x, uint16_t *xf)
-{
-    uint16_t f = *xf, ip;
-    uint8_t shift = 0;
-    *xf += SPEED_LO[P.speed_idx];
-    *x += P.speed + (*xf < f);
-
-    /* bits to drop below the 24 kept, from the top bit of x in 1/2^32 blocks */
-    ip = (uint16_t)(*x >> 16);
-    if (ip) {
-        shift = 9; /* top bit 32 */
-        while (ip >>= 1) shift++;
-    } else {
-        uint16_t fp = (uint16_t)*x;
-        if (fp & 0xff00) {
-            fp >>= 8;
-            shift = 1; /* top bit 24 */
-            while (fp >>= 1) shift++;
-        }
-    }
-    if (!shift) return;
-
-    if (shift <= 16) {
-        uint16_t half = BIT[shift - 1];
-        uint16_t rem = shift == 16 ? *xf : *xf & (uint16_t)(half + half - 1);
-        uint8_t odd = shift == 16 ? (uint8_t)(*x & 1) : (uint8_t)((*xf & (uint16_t)(half + half)) != 0);
-        *xf -= rem;
-        if (rem > half || (rem == half && odd)) {
-            if (shift == 16) {
-                (*x)++;
-            } else {
-                f = *xf;
-                *xf += half + half;
-                if (*xf < f) (*x)++;
-            }
-        }
-    } else {
-        /* drop all of xf and the low shift-16 bits of x */
-        uint8_t s2 = shift - 16;
-        uint16_t half = BIT[s2 - 1];
-        uint16_t rem = (uint16_t)*x & (uint16_t)(half + half - 1);
-        uint8_t up = rem > half || (rem == half && (*xf || (*x & (half + half))));
-        *x -= rem;
-        *xf = 0;
-        if (up) *x += (uint32_t)half << 1;
-    }
-}
-
-/* the step's cache: for speed s_speed and x's whole blocks in [s_lo, s_hi) */
-static uint8_t s_speed = 0xff;
-static uint16_t s_lo, s_hi, s_step, s_step_f;
-
+/* x += the speed's step, exactly (x and xfrac are x in 1/2^32 blocks) */
 static void advance_x(void)
 {
-    uint16_t ip = X_HI();
-    if (ip && P.speed_idx == s_speed && ip >= s_lo) {
-        uint16_t lo = X_LO(), nf = P.xfrac + s_step_f, nlo;
-        nlo = lo + s_step + (nf < P.xfrac);
-        ip += nlo < lo;
-        if (ip < s_hi) {
-            SET_X(ip, nlo);
-            P.xfrac = nf;
-            return;
-        }
-    }
-    add_round(&P.x, &P.xfrac);
-    ip = X_HI();
-    if (ip) {
-        /* the step from the start of this power of two */
-        uint32_t x;
-        uint16_t xf = 0;
-        s_lo = 1;
-        while (ip >= (uint16_t)(s_lo << 1) && s_lo < 0x4000) s_lo <<= 1;
-        s_hi = s_lo << 1;
-        x = (uint32_t)s_lo << 16;
-        add_round(&x, &xf);
-        s_step = (uint16_t)(x - ((uint32_t)s_lo << 16));
-        s_step_f = xf;
-        s_speed = P.speed_idx;
-    }
+    uint16_t f = P.xfrac, lo = X_LO(), nlo;
+    P.xfrac = f + SPEED_LO[P.speed_idx];
+    nlo = lo + P.speed + (P.xfrac < f);
+    SET_X(X_HI() + (nlo < lo), nlo);
 }
 
 static void enter_mode(uint8_t mode, int16_t cy)
 {
-    if (mode != GM_CUBE) {
+    if (mode != MODE_CUBE) {
         /* corridor centred on the portal: floor(cy + 0.5 - 5 + 0.5) */
-        int16_t fl = cy - GS_CORRIDOR / 2 + 1;
+        int16_t fl = cy - SIM_CORRIDOR / 2 + 1;
         if (fl < 0) fl = 0;
         P.floor_y = (int8_t)fl;
-        P.ceil_y = (int8_t)(fl + GS_CORRIDOR);
+        P.ceil_y = (int8_t)(fl + SIM_CORRIDOR);
     }
     if (P.mode != mode) {
         P.vy = P.vy / 2;
@@ -571,7 +455,7 @@ static uint8_t low_ok(uint8_t cy, uint16_t top)
 {
     if (dy0 > 0 || (dy0 == 0 && my0f >= (uint16_t)(top - s_step_up))) return 1;
     if (!s_prev_ok) prev_edges();
-    return pli > (int16_t)cy || (pli == (int16_t)cy && plf >= (uint16_t)(top - SNAP_EPS));
+    return pli > (int16_t)cy || (pli == (int16_t)cy && plf >= (uint16_t)(top - SIM_SNAP_EPS));
 }
 
 /* ... hang under it: the same for the high edge and the solid's bottom */
@@ -579,7 +463,7 @@ static uint8_t high_ok(uint8_t cy, uint16_t bottom)
 {
     if (dy1 < 0 || (dy1 == 0 && my1f <= (uint16_t)(bottom + s_step_up))) return 1;
     if (!s_prev_ok) prev_edges();
-    return phi < (int16_t)cy || (phi == (int16_t)cy && phf <= (uint16_t)(bottom + SNAP_EPS));
+    return phi < (int16_t)cy || (phi == (int16_t)cy && phf <= (uint16_t)(bottom + SIM_SNAP_EPS));
 }
 
 /* y = cy + top (a whole block's: 1) + hh, on the solid */
@@ -609,23 +493,23 @@ static void solid_cell(uint8_t ci, uint8_t cy)
     s_cy = cy;
     at_cell();
     if (!box_solid(t)) return;
-    top = t == GT_SLAB_LO ? 32768 : 0;
-    bottom = t == GT_SLAB_HI ? 32768 : 0;
+    top = t == OBJ_SLAB_LO ? 32768 : 0;
+    bottom = t == OBJ_SLAB_HI ? 32768 : 0;
     if (P.grav > 0) {
-        if (P.vy <= 0 && (t != GT_BLOCK || !BLOCK_ABOVE(ci, cy)) && low_ok(cy, top)) {
+        if (P.vy <= 0 && (t != OBJ_BLOCK || !BLOCK_ABOVE(ci, cy)) && low_ok(cy, top)) {
             land_on(cy, top);
             P.vy = 0;
             P.grounded = 1;
-        } else if (s_can_ceil && P.vy >= 0 && (t != GT_BLOCK || !BLOCK_BELOW(ci, cy)) && high_ok(cy, bottom)) {
+        } else if (s_can_ceil && P.vy >= 0 && (t != OBJ_BLOCK || !BLOCK_BELOW(ci, cy)) && high_ok(cy, bottom)) {
             hang_under(cy, bottom);
             P.vy = 0;
         }
     } else {
-        if (P.vy >= 0 && (t != GT_BLOCK || !BLOCK_BELOW(ci, cy)) && high_ok(cy, bottom)) {
+        if (P.vy >= 0 && (t != OBJ_BLOCK || !BLOCK_BELOW(ci, cy)) && high_ok(cy, bottom)) {
             hang_under(cy, bottom);
             P.vy = 0;
             P.grounded = 1;
-        } else if (s_can_ceil && P.vy <= 0 && (t != GT_BLOCK || !BLOCK_ABOVE(ci, cy)) && low_ok(cy, top)) {
+        } else if (s_can_ceil && P.vy <= 0 && (t != OBJ_BLOCK || !BLOCK_ABOVE(ci, cy)) && low_ok(cy, top)) {
             land_on(cy, top);
             P.vy = 0;
         }
@@ -648,8 +532,8 @@ static void resolve_solids(void)
             uint8_t cy0 = r_lo, n = (uint8_t)(mx1i - mx0i) + 1;
             s_prev_ok = 0;
             s_y_moved = 0;
-            s_can_ceil = P.mode != GM_CUBE;
-            s_step_up = P.mode == GM_WAVE ? 3932 : 16384;
+            s_can_ceil = P.mode != MODE_CUBE;
+            s_step_up = P.mode == MODE_WAVE ? SIM_STEP_UP_WAVE : SIM_STEP_UP;
             s_cx = mx0i;
             do {
                 if ((uint16_t)s_cx < gs_width) {
@@ -674,7 +558,7 @@ static void resolve_solids(void)
     s_solids_y = P.y;
 
     /* World floor / corridor bounds never kill, they just stop you. */
-    if (P.mode == GM_CUBE) {
+    if (P.mode == MODE_CUBE) {
         int16_t hi = Y_HI();
         if (hi < 0 || (hi == 0 && Y_LO() < s_hh)) { /* y < hh */
             SET_Y(0, s_hh);
@@ -740,25 +624,25 @@ static uint8_t inner_hits_solid(void)
 
 static void apply_orb(uint8_t k)
 {
-    if (P.mode == GM_WAVE) {
-        if (k == GT_ORB_BLUE || k == GT_ORB_GREEN) {
+    if (P.mode == MODE_WAVE) {
+        if (k == OBJ_ORB_BLUE || k == OBJ_ORB_GREEN) {
             P.grav = (int8_t)-P.grav;
-            P.events |= GE_GRAVITY;
+            P.events |= EV_GRAVITY;
         }
         return;
     }
     switch (k) {
-    case GT_ORB_YELLOW: P.vy = P.grav > 0 ? ORB_YELLOW_V[P.mode] : -ORB_YELLOW_V[P.mode]; break;
-    case GT_ORB_PINK: P.vy = P.grav > 0 ? ORB_PINK_V[P.mode] : -ORB_PINK_V[P.mode]; break;
-    case GT_ORB_BLUE:
+    case OBJ_ORB_YELLOW: P.vy = P.grav > 0 ? ORB_YELLOW_V[P.mode] : -ORB_YELLOW_V[P.mode]; break;
+    case OBJ_ORB_PINK: P.vy = P.grav > 0 ? ORB_PINK_V[P.mode] : -ORB_PINK_V[P.mode]; break;
+    case OBJ_ORB_BLUE:
         P.grav = (int8_t)-P.grav;
-        P.vy = P.grav > 0 ? -ORB_BLUE_V : ORB_BLUE_V;
-        P.events |= GE_GRAVITY;
+        P.vy = P.grav > 0 ? -SIM_ORB_BLUE_V : SIM_ORB_BLUE_V;
+        P.events |= EV_GRAVITY;
         break;
-    case GT_ORB_GREEN:
+    case OBJ_ORB_GREEN:
         P.grav = (int8_t)-P.grav;
         P.vy = P.grav > 0 ? ORB_YELLOW_V[P.mode] : -ORB_YELLOW_V[P.mode];
-        P.events |= GE_GRAVITY;
+        P.events |= EV_GRAVITY;
         break;
     }
     P.grounded = 0;
@@ -766,20 +650,20 @@ static void apply_orb(uint8_t k)
 
 static void apply_pad(uint8_t k)
 {
-    if (P.mode == GM_WAVE) {
-        if (k == GT_PAD_BLUE) {
+    if (P.mode == MODE_WAVE) {
+        if (k == OBJ_PAD_BLUE) {
             P.grav = (int8_t)-P.grav;
-            P.events |= GE_GRAVITY;
+            P.events |= EV_GRAVITY;
         }
         return;
     }
     switch (k) {
-    case GT_PAD_YELLOW: P.vy = P.grav > 0 ? PAD_YELLOW_V[P.mode] : -PAD_YELLOW_V[P.mode]; break;
-    case GT_PAD_PINK: P.vy = P.grav > 0 ? PAD_PINK_V[P.mode] : -PAD_PINK_V[P.mode]; break;
-    case GT_PAD_BLUE:
+    case OBJ_PAD_YELLOW: P.vy = P.grav > 0 ? PAD_YELLOW_V[P.mode] : -PAD_YELLOW_V[P.mode]; break;
+    case OBJ_PAD_PINK: P.vy = P.grav > 0 ? PAD_PINK_V[P.mode] : -PAD_PINK_V[P.mode]; break;
+    case OBJ_PAD_BLUE:
         P.grav = (int8_t)-P.grav;
-        P.vy = P.grav > 0 ? -PAD_BLUE_V : PAD_BLUE_V;
-        P.events |= GE_GRAVITY;
+        P.vy = P.grav > 0 ? -SIM_PAD_BLUE_V : SIM_PAD_BLUE_V;
+        P.events |= EV_GRAVITY;
         break;
     }
     P.grounded = 0;
@@ -788,8 +672,8 @@ static void apply_pad(uint8_t k)
 /* Objects that can touch a box outside their cell: big saws (r 0.72),
  * orbs (0.1 beyond) and portals (a block above and below). */
 #define REACHES_OUT(k) \
-    ((k) == GT_SAW_BIG || (uint8_t)((k) - GT_ORB_YELLOW) <= GT_ORB_GREEN - GT_ORB_YELLOW || \
-     (uint8_t)((k) - GT_PORTAL_CUBE) <= GT_SPEED_3 - GT_PORTAL_CUBE)
+    ((k) == OBJ_SAW_BIG || (uint8_t)((k) - OBJ_ORB_YELLOW) <= OBJ_ORB_GREEN - OBJ_ORB_YELLOW || \
+     (uint8_t)((k) - OBJ_PORTAL_CUBE) <= OBJ_SPEED_3 - OBJ_PORTAL_CUBE)
 
 /* The object in cell (s_cx, cy) against the outer box; info: its
  * gs_tile_info. */
@@ -799,77 +683,75 @@ static void touch_cell(uint8_t cy, uint8_t info)
     uint16_t key;
     s_cy = cy;
     at_cell();
-    if (k <= GT_SAW_SMALL) {
+    if (k <= OBJ_SAW_SMALL) {
         uint8_t hit;
         if (P.dead) return;
         switch (k) {
-        case GT_SPIKE_UP: hit = BOX(26214L, 13107L, 39322L, 39322L); break;       /* 0.4..0.6 x 0.2..0.6 */
-        case GT_SPIKE_DOWN: hit = BOX(26214L, 26214L, 39322L, 52429L); break;     /* 0.4..0.8 */
-        case GT_SPIKE_SM_UP: hit = BOX(26214L, 3277L, 39322L, 22938L); break;     /* 0.05..0.35 */
-        case GT_SPIKE_SM_DOWN: hit = BOX(26214L, 42598L, 39322L, 62259L); break;  /* 0.65..0.95 */
-        case GT_SAW_BIG: hit = circle_hit(s_cx, cy, 47186); break;                /* 0.72 */
-        default: hit = circle_hit(s_cx, cy, 23593); break;                        /* 0.36 */
+        case OBJ_SPIKE_UP: hit = OBJ_BOX(SIM_BOX_SPIKE_UP); break;
+        case OBJ_SPIKE_DOWN: hit = OBJ_BOX(SIM_BOX_SPIKE_DOWN); break;
+        case OBJ_SPIKE_SM_UP: hit = OBJ_BOX(SIM_BOX_SPIKE_SM_UP); break;
+        case OBJ_SPIKE_SM_DOWN: hit = OBJ_BOX(SIM_BOX_SPIKE_SM_DOWN); break;
+        case OBJ_SAW_BIG: hit = circle_hit(s_cx, cy, SIM_SAW_BIG_R); break;
+        default: hit = circle_hit(s_cx, cy, SIM_SAW_SMALL_R); break;
         }
         if (hit) {
             P.dead = 1;
-            P.events |= GE_DEATH;
+            P.events |= EV_DEATH;
         }
         return;
     }
     /* (each test below asks is_used after the box test: the same
      * answer as asking first, and quicker) */
     key = ((uint16_t)s_cx << 4) | cy;
-    if (k <= GT_ORB_GREEN) {
-        if (P.buf && BOX(-6554L, -6554L, 72090L, 72090L) && !is_used(key)) { /* centre +- 0.6 */
+    if (k <= OBJ_ORB_GREEN) {
+        if (P.buf && OBJ_BOX(SIM_BOX_ORB) && !is_used(key)) {
             set_used(key);
             P.buf = 0;
             apply_orb(k);
-            P.events |= GE_ORB;
+            P.events |= EV_ORB;
             P.ev_cell = key;
         }
-    } else if (k <= GT_PAD_BLUE) {
-        /* 0.05..0.95 x 0..0.3, or 0.7..1 on a ceiling */
-        if (((info & GTI_CEILING) ? BOX(3277L, 45875L, 62259L, ONE) : BOX(3277L, 0L, 62259L, 19661L)) &&
+    } else if (k <= OBJ_PAD_BLUE) {
+        if (((info & GTI_CEILING) ? OBJ_BOX(SIM_BOX_PAD_CEILING) : OBJ_BOX(SIM_BOX_PAD)) &&
             !is_used(key)) {
             set_used(key);
             apply_pad(k);
-            P.events |= GE_PAD;
+            P.events |= EV_PAD;
             P.ev_cell = key;
         }
-    } else if (k <= GT_SPEED_3) {
-        /* 0.15..0.85, a block above and below */
-        if (!BOX(9830L, -ONE, 55706L, 2 * ONE) || is_used(key)) return;
+    } else if (k <= OBJ_SPEED_3) {
+        if (!OBJ_BOX(SIM_BOX_PORTAL) || is_used(key)) return;
         set_used(key);
         P.ev_cell = key;
         switch (k) {
-        case GT_PORTAL_CUBE: enter_mode(GM_CUBE, cy); P.events |= GE_PORTAL; break;
-        case GT_PORTAL_SHIP: enter_mode(GM_SHIP, cy); P.events |= GE_PORTAL; break;
-        case GT_PORTAL_BALL: enter_mode(GM_BALL, cy); P.events |= GE_PORTAL; break;
-        case GT_PORTAL_UFO: enter_mode(GM_UFO, cy); P.events |= GE_PORTAL; break;
-        case GT_PORTAL_WAVE: enter_mode(GM_WAVE, cy); P.events |= GE_PORTAL; break;
-        case GT_PORTAL_FLIP:
-        case GT_PORTAL_NORMAL: {
-            int8_t ng = k == GT_PORTAL_FLIP ? -1 : 1;
+        case OBJ_PORTAL_CUBE: enter_mode(MODE_CUBE, cy); P.events |= EV_PORTAL; break;
+        case OBJ_PORTAL_SHIP: enter_mode(MODE_SHIP, cy); P.events |= EV_PORTAL; break;
+        case OBJ_PORTAL_BALL: enter_mode(MODE_BALL, cy); P.events |= EV_PORTAL; break;
+        case OBJ_PORTAL_UFO: enter_mode(MODE_UFO, cy); P.events |= EV_PORTAL; break;
+        case OBJ_PORTAL_WAVE: enter_mode(MODE_WAVE, cy); P.events |= EV_PORTAL; break;
+        case OBJ_PORTAL_GRAV_FLIP:
+        case OBJ_PORTAL_GRAV_NORMAL: {
+            int8_t ng = k == OBJ_PORTAL_GRAV_FLIP ? -1 : 1;
             if (ng != P.grav) {
                 P.grav = ng;
                 P.vy = (int16_t)((int32_t)P.vy * 2 / 5); /* x0.4 */
                 P.grounded = 0;
-                P.events |= GE_GRAVITY;
+                P.events |= EV_GRAVITY;
             }
-            P.events |= GE_PORTAL;
+            P.events |= EV_PORTAL;
             break;
         }
         default:
-            P.speed_idx = (uint8_t)(k - GT_SPEED_0);
-            P.speed = GS_SPEEDS[P.speed_idx];
-            P.events |= GE_SPEED;
+            P.speed_idx = (uint8_t)(k - OBJ_SPEED_0);
+            P.speed = SPEED_HI[P.speed_idx];
+            P.events |= EV_SPEED;
             break;
         }
-    } else if (k == GT_COIN) {
-        if (BOX(6554L, 6554L, 58982L, 58982L) && !is_used(key)) { /* 0.1..0.9 */
+    } else if (k == OBJ_COIN) {
+        if (OBJ_BOX(SIM_BOX_COIN) && !is_used(key)) {
             set_used(key);
             P.coins |= (uint8_t)(1u << GTI_COIN(info));
-            P.events |= GE_COIN;
+            P.events |= EV_COIN;
             P.ev_cell = key;
         }
     }
@@ -938,12 +820,11 @@ static uint16_t s_part_t;
 #define PART(i)
 #endif
 
-/* fallen far below the ground or flown far above the level: y < -6 or
- * y > height + 24 */
+/* fallen far below the ground or flown far above the level */
 static uint8_t y_out(void)
 {
-    int16_t yi = Y_HI(), top = (int16_t)gs_height + 24;
-    return yi < -6 || yi > top || (yi == top && Y_LO());
+    int16_t yi = Y_HI(), top = (int16_t)gs_height + SIM_Y_ABOVE;
+    return yi < SIM_Y_MIN || yi > top || (yi == top && Y_LO());
 }
 
 static void substep(uint8_t held)
@@ -951,66 +832,66 @@ static void substep(uint8_t held)
     uint8_t was_grounded;
 
     switch (P.mode) {
-    case GM_CUBE:
+    case MODE_CUBE:
         if (P.grounded && held) {
-            P.vy = P.grav > 0 ? CUBE_JUMP : -CUBE_JUMP;
+            P.vy = P.grav > 0 ? SIM_CUBE_JUMP : -SIM_CUBE_JUMP;
             P.grounded = 0;
             P.buf = 0;
             P.jumps++;
-            P.events |= GE_JUMP;
+            P.events |= EV_JUMP;
         } else if (P.grav > 0) {
-            P.vy -= CUBE_GRAV;
-            if (P.vy < -CUBE_MAXFALL) P.vy = -CUBE_MAXFALL;
+            P.vy -= SIM_CUBE_GRAV;
+            if (P.vy < -SIM_CUBE_MAXFALL) P.vy = -SIM_CUBE_MAXFALL;
         } else {
-            P.vy += CUBE_GRAV;
-            if (P.vy > CUBE_MAXFALL) P.vy = CUBE_MAXFALL;
+            P.vy += SIM_CUBE_GRAV;
+            if (P.vy > SIM_CUBE_MAXFALL) P.vy = SIM_CUBE_MAXFALL;
         }
         break;
-    case GM_SHIP:
+    case MODE_SHIP:
         if (P.grav > 0) {
-            P.vy += held ? SHIP_UP : -SHIP_DOWN;
-            if (P.vy > SHIP_MAXRISE) P.vy = SHIP_MAXRISE;
-            if (P.vy < -SHIP_MAXFALL) P.vy = -SHIP_MAXFALL;
+            P.vy += held ? SIM_SHIP_UP : -SIM_SHIP_DOWN;
+            if (P.vy > SIM_SHIP_MAXRISE) P.vy = SIM_SHIP_MAXRISE;
+            if (P.vy < -SIM_SHIP_MAXFALL) P.vy = -SIM_SHIP_MAXFALL;
         } else {
-            P.vy -= held ? SHIP_UP : -SHIP_DOWN;
-            if (P.vy < -SHIP_MAXRISE) P.vy = -SHIP_MAXRISE;
-            if (P.vy > SHIP_MAXFALL) P.vy = SHIP_MAXFALL;
+            P.vy -= held ? SIM_SHIP_UP : -SIM_SHIP_DOWN;
+            if (P.vy < -SIM_SHIP_MAXRISE) P.vy = -SIM_SHIP_MAXRISE;
+            if (P.vy > SIM_SHIP_MAXFALL) P.vy = SIM_SHIP_MAXFALL;
         }
         break;
-    case GM_BALL:
+    case MODE_BALL:
         if (P.grounded && P.buf) {
             P.grav = (int8_t)-P.grav;
-            P.vy = P.grav > 0 ? -BALL_KICK : BALL_KICK;
+            P.vy = P.grav > 0 ? -SIM_BALL_KICK : SIM_BALL_KICK;
             P.grounded = 0;
             P.buf = 0;
             P.jumps++;
-            P.events |= GE_JUMP | GE_GRAVITY;
+            P.events |= EV_JUMP | EV_GRAVITY;
         }
         if (P.grav > 0) {
-            P.vy -= BALL_GRAV;
-            if (P.vy < -BALL_MAXFALL) P.vy = -BALL_MAXFALL;
+            P.vy -= SIM_BALL_GRAV;
+            if (P.vy < -SIM_BALL_MAXFALL) P.vy = -SIM_BALL_MAXFALL;
         } else {
-            P.vy += BALL_GRAV;
-            if (P.vy > BALL_MAXFALL) P.vy = BALL_MAXFALL;
+            P.vy += SIM_BALL_GRAV;
+            if (P.vy > SIM_BALL_MAXFALL) P.vy = SIM_BALL_MAXFALL;
         }
         break;
-    case GM_UFO:
+    case MODE_UFO:
         if (P.buf) {
-            P.vy = P.grav > 0 ? UFO_JUMP : -UFO_JUMP;
+            P.vy = P.grav > 0 ? SIM_UFO_JUMP : -SIM_UFO_JUMP;
             P.buf = 0;
             P.grounded = 0;
             P.jumps++;
-            P.events |= GE_JUMP;
+            P.events |= EV_JUMP;
         }
         if (P.grav > 0) {
-            P.vy -= UFO_GRAV;
-            if (P.vy < -UFO_MAXFALL) P.vy = -UFO_MAXFALL;
+            P.vy -= SIM_UFO_GRAV;
+            if (P.vy < -SIM_UFO_MAXFALL) P.vy = -SIM_UFO_MAXFALL;
         } else {
-            P.vy += UFO_GRAV;
-            if (P.vy > UFO_MAXFALL) P.vy = UFO_MAXFALL;
+            P.vy += SIM_UFO_GRAV;
+            if (P.vy > SIM_UFO_MAXFALL) P.vy = SIM_UFO_MAXFALL;
         }
         break;
-    case GM_WAVE: {
+    case MODE_WAVE: {
         int8_t dir = held ? P.grav : (int8_t)-P.grav;
         P.vy = dir > 0 ? (int16_t)P.speed : -(int16_t)P.speed;
         break;
@@ -1032,12 +913,12 @@ static void substep(uint8_t held)
     s_hh = HIT_H[P.mode];
     P.grounded = 0;
     resolve_solids();
-    if (P.grounded && !was_grounded) P.events |= GE_LAND;
+    if (P.grounded && !was_grounded) P.events |= EV_LAND;
     PART(2);
 
     if (inner_hits_solid() || y_out()) {
         P.dead = 1;
-        P.events |= GE_DEATH;
+        P.events |= EV_DEATH;
         return;
     }
     PART(3);
@@ -1048,7 +929,7 @@ static void substep(uint8_t held)
 
     if (X_HI() >= gs_width) {
         P.done = 1;
-        P.events |= GE_COMPLETE;
+        P.events |= EV_COMPLETE;
     }
 }
 
@@ -1089,7 +970,7 @@ void gs_tick(uint8_t held, uint8_t pressed) GS_BANKED
     PART_BEGIN();
     broad_phase();
     PART(5);
-    for (i = 0; i < GS_SUBSTEPS; i++) {
+    for (i = 0; i < SIM_SUBSTEPS; i++) {
         substep(held);
         if (P.dead || P.done) break;
     }

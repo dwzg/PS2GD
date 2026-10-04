@@ -14,12 +14,13 @@ OUT := build/ps2$(if $(filter 1,$(PERF)),-perf)
 EE_BIN := $(OUT)/pulsedash-unpacked.elf
 EE_BIN_PACKED := $(OUT)/PULSEDASH.ELF
 
-SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c) $(wildcard src/ps2/*.c)
+include sources.mk
+SRC := $(CORE_SRC) $(wildcard src/ps2/*.c)
 # IOP modules from ps2sdk, compiled into the ELF as C arrays (see src/ps2/irx.c)
 IRX := libsd audsrv sio2man padman mcman mcserv
 EE_OBJS := $(patsubst src/%.c,$(OUT)/%.o,$(SRC)) $(patsubst %,$(OUT)/irx/%_irx.o,$(IRX))
 
-EE_INCS := -I$(GSKIT)/include -I$(PS2SDK)/ports/include
+EE_INCS := -Isrc/ps2 -I$(GSKIT)/include -I$(PS2SDK)/ports/include
 EE_CFLAGS := -std=gnu99 -DPS2 -Wno-unused-parameter $(if $(filter 1,$(PERF)),-DPD_PERF)
 EE_OPTFLAGS := -O2
 EE_LDFLAGS := -L$(GSKIT)/lib -L$(PS2SDK)/ports/lib
