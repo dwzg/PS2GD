@@ -7,6 +7,8 @@ section from this file as release notes.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-04
+
 ### Added
 
 - A PSP version: `EBOOT.PBP` for a PSP with custom firmware, a PS Vita with
@@ -106,5 +108,6 @@ First release.
   blank (the audio thread could delay them before), and drawn interpolated
   between game ticks, which also makes PAL (50 Hz) consoles scroll evenly.
 
-[Unreleased]: https://github.com/dwzg/pulse-dash/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/dwzg/pulse-dash/releases/tag/v1.0.0
+[Unreleased]: https://github.com/dwzg/pulsedash/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/dwzg/pulsedash/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/dwzg/pulsedash/releases/tag/v1.0.0
