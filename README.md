@@ -1,8 +1,8 @@
 # Pulse Dash
 
-A rhythm platformer for the **PlayStation 2**, inspired by Geometry Dash:
-tap to jump, hold to fly, and get through each level in one go, in time
-with the music.
+A rhythm platformer for the **PlayStation 2** and the **PSP**, inspired by
+Geometry Dash: tap to jump, hold to fly, and get through each level in one
+go, in time with the music.
 
 ![Title screen](docs/screenshots/title.png)
 
@@ -38,21 +38,29 @@ an unofficial fan project, not affiliated with or endorsed by RobTop Games;
   tracks from note data in `src/core/songs.c`. No audio files ship with the
   game.
 - **Memory card saves** (`mc0:/PULSEDASH`, with a browser icon), falling back
-  to the second slot.
+  to the second slot. On the PSP, progress is saved next to the game on the
+  memory stick.
 - Vector graphics drawn entirely from GS primitives (no textures), 640x448.
   NTSC (59.94 Hz) and PAL (50 Hz): the game logic runs at a fixed 60 Hz and
   every frame is drawn interpolated to the moment it is shown, so the
   scrolling is even at either refresh rate.
+- **On the PSP** the game fills the 16:9 screen: levels show more of what is
+  ahead, the menus are laid out for it, and text, icons and outlines are
+  drawn on whole pixels of the 480x272 LCD so they stay sharp and even. It
+  has its own XMB icon and background, drawn by the game's renderer.
 
 ## Controls
 
 | Button | Action |
 |--------|--------|
-| ✕ / ○ / ↑ / L1 / R1 | Jump; hold to fly (ship) or climb (wave) |
+| ✕ / ○ / ↑ / L1 / R1 (L / R on the PSP) | Jump; hold to fly (ship) or climb (wave) |
 | START | Pause |
 | □ (practice) | Place checkpoint |
 | △ (practice) | Remove last checkpoint |
 | ✕ / □ / ○ in the level menu | Play / practice / back |
+
+On the PSP the analog nub works like the d-pad, and HOME > Quit saves any
+unsaved progress before the game exits.
 
 ## Running it
 
@@ -64,9 +72,17 @@ the title screen.
 Any controller in port 1 or 2 works; progress is saved to the memory card
 in slot 1 (or slot 2).
 
-**In an emulator:** [Play!](https://purei.org) boots the ELF directly
+**On a PSP:** download `pulsedash-<version>-psp.zip` from the latest
+[release](../../releases/latest) and unzip it onto the memory stick: it
+creates `PSP/GAME/PulseDash/EBOOT.PBP`. Pulse Dash then shows up in the XMB's
+Game menu. Homebrew needs custom firmware (for example ARK-4 or PRO); a PS
+Vita runs it through Adrenaline. Progress is saved in `SAVE.DAT` in the same
+folder.
+
+**In an emulator:** [Play!](https://purei.org) boots the PS2 ELF directly
 (File > Boot ELF), no BIOS needed. PCSX2 can boot it too ("Run ELF") with
-your own BIOS dump.
+your own BIOS dump. [PPSSPP](https://www.ppsspp.org) runs the PSP version
+(open `EBOOT.PBP`).
 
 **On a PC:** the same game builds as an SDL2 program (keyboard: Space/Up to
 jump, Esc to pause, Q/E for checkpoints, Backspace to go back; gamepads
@@ -91,6 +107,18 @@ or with a local [ps2dev](https://github.com/ps2dev/ps2dev) install
 Builds show `git describe` on the title screen (the tag for a release, else
 the commit); `make VERSION=...` overrides it.
 
+PSP, using the official toolchain image (needs Docker):
+
+```sh
+scripts/build-psp.sh          # -> build/psp/EBOOT.PBP
+```
+
+or with a local [pspdev](https://github.com/pspdev/pspdev) install
+(`psp-config` on `PATH`): `make -f Makefile.psp`. The build also leaves
+`pulsedash.elf` next to the EBOOT, with debug symbols. The XMB icon and
+background in `src/psp/` are drawn by the game itself:
+`make -f Makefile.host PSP=1 psp-art` redraws them.
+
 PC version and developer tools (needs SDL2):
 
 ```sh
@@ -98,14 +126,19 @@ make -f Makefile.host         # -> build/host/pulsedash, build/host/pd_tool
 build/host/pulsedash
 ```
 
-GitHub Actions builds the ELF (uploaded as an artifact) and runs the tests
-on every push.
+`make -f Makefile.host PSP=1` builds the same in the PSP's widescreen layout
+(in `build/host-psp/`), to try it out on a PC; `pd_tool shot` and
+`pd_tool menu` take an output width, so `... menu title out.png 1 480` shows
+a screen exactly as the PSP draws it.
+
+GitHub Actions builds the ELF and the EBOOT (uploaded as artifacts) and runs
+the tests on every push.
 
 ### Releases
 
 Describe the version in [CHANGELOG.md](CHANGELOG.md) (a `## [1.1.0] - date`
 section), then push a version tag; CI publishes a GitHub release once the
-tests and the PS2 build pass:
+tests and the PS2 and PSP builds pass:
 
 ```sh
 git tag v1.1.0
@@ -113,7 +146,8 @@ git push origin v1.1.0
 ```
 
 The release carries `PULSEDASH.ELF`, a zip with it plus the README,
-changelog and licenses, and `SHA256SUMS`. Its notes are the
+changelog and licenses, a PSP zip (`PSP/GAME/PulseDash/` with the EBOOT and
+the same documents) and `SHA256SUMS`. Its notes are the
 version's changelog section followed by the merged pull requests. Tags with
 a hyphen (`v1.1.0-rc1`) become pre-releases.
 
@@ -123,6 +157,8 @@ a hyphen (`v1.1.0-rc1`) become pre-releases.
 make -f Makefile.host test        # data checks, smoke test, solver, rhythm, coins, contrast, title demo
 make -f Makefile.host test-full   # also proves levels beatable at 30 and 20 Hz input
 scripts/emu-test.sh               # run the real PS2 ELF in the Play! core, headless
+scripts/psp-emu-test.sh           # run the real PSP EBOOT in PPSSPP, headless
+make -f Makefile.host PSP=1 test  # the same tests in the PSP's widescreen layout
 ```
 
 `pd_tool` contains a level solver: a breadth-first search over button
@@ -161,6 +197,27 @@ input (see the comment in `scripts/emu-test.sh`): replayed on the PS2 ELF,
 Neon Steps is played on the beat up to its first ship section on the first
 attempt.
 
+`scripts/psp-emu-test.sh` does the same for the PSP build with
+[PPSSPP](https://github.com/hrydgard/ppsspp)'s headless runner and its
+software renderer: it hooks `tools/ppsspp-harness/PdHarness.cpp` into the
+runner, which presses buttons on a schedule (`PD_SCRIPT`, same format, at the
+PSP's 59.94 Hz), saves screenshots (`PD_SHOTS`), can choose HOME > Quit
+(`PD_QUIT=<frame>`) and can hold the analog nub off centre from boot
+(`PD_NUB=x,y,frames`, a nub that reads off centre until it is moved). These
+frames come from the PSP build:
+
+![PSP build running in PPSSPP](docs/screenshots/psp-emulator.png)
+
+`make -f Makefile.psp PERF=1` builds `build/psp-perf/EBOOT.PBP`, which logs
+the same per-frame figures (in microseconds from the system clock) and the
+attempt markers. In PPSSPP a level uses about 2% of a frame for logic and
+drawing, 0.2% for the GE and 5-9% for the music, and no frame is late; the
+on-beat replay plays Neon Steps to its first ship section on the first
+attempt, as on the PS2. The harness also showed that quitting has to finish
+inside the exit callback (the system powers down when it returns), so the
+callback waits for the loop to write the save before it exits the game.
+Quitting saves, and the next boot loads it, in that test.
+
 ## Making levels
 
 Levels are ASCII art in `src/levels/*.c`; see
@@ -173,11 +230,15 @@ level, in `src/core/demo.c`.
 ```
 src/core/     portable game: physics (sim.c), levels, rendering, menus,
               synth + songs, saves. Plain C99, single-precision floats only.
+              PD_PSP selects the PSP's widescreen layout (common.h).
 src/levels/   the six levels
 src/ps2/      PS2 frontend: gsKit renderer, audsrv streaming thread,
               libpad, libmc saves + browser icon, boot/module loading
+src/psp/      PSP frontend: GU renderer, SRC audio thread, sceCtrl input,
+              memory stick saves, XMB icon and background
 src/host/     SDL2 frontend and pd_tool (solver, screenshots, WAV export)
-tools/play-harness/   emulator test harness (used by scripts/emu-test.sh)
+tools/play-harness/   PS2 emulator test harness (used by scripts/emu-test.sh)
+tools/ppsspp-harness/ PSP emulator test hooks (used by scripts/psp-emu-test.sh)
 tools/beat_align.py   moves a level's obstacles onto the beat of its song
 ```
 
@@ -186,6 +247,9 @@ tools/beat_align.py   moves a level's obstacles onto the beat of its song
 Runs on real PS2 hardware, in the Play! emulator core (boot, module loading,
 controller input, audio streaming, memory card save/load and GS rendering)
 and on PC. Not yet tried in PCSX2.
+
+The PSP version runs in PPSSPP (rendering, controls, audio streaming, memory
+stick save/load, HOME > Quit); it has not been tried on a real PSP yet.
 
 ## License
 

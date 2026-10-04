@@ -7,6 +7,48 @@ section from this file as release notes.
 
 ## [Unreleased]
 
+### Added
+
+- A PSP version: `EBOOT.PBP` for a PSP with custom firmware, a PS Vita with
+  Adrenaline, or PPSSPP. It fills the PSP's 16:9 screen (levels show more of
+  what is ahead, menus are centred for it), draws text, icons and outlines
+  on whole pixels of the 480x272 LCD so they stay sharp and even (the
+  cube's borders come out the same width on every side, block edges keep
+  their width as the level scrolls), plays the synthesized soundtrack at
+  48 kHz, and saves progress next to the game on the memory stick. HOME >
+  Quit saves before exiting. The XMB icon and background are drawn by the
+  game's own renderer.
+- Releases also carry a PSP zip that unpacks to `PSP/GAME/PulseDash/`.
+- The PC version and tools can be built in the PSP's layout
+  (`make -f Makefile.host PSP=1`); `pd_tool` writes PNG images and takes an
+  output width for menu screenshots.
+- `scripts/psp-emu-test.sh` runs the PSP build in PPSSPP's headless runner
+  with scripted button presses and screenshots.
+
+### Fixed
+
+- The NEW BEST popup: it grows in smoothly over a third of a second, its
+  black outline with it (it used to flash a black blot for the first
+  frames), it fades out evenly (it used to fade in stripes where the
+  outline's pieces overlapped), and it sits higher, above the next
+  attempt's counter, instead of running into it. The LEVEL COMPLETE title
+  pops in the same way.
+- The glow over the ground's surface line stopped short of the screen
+  edges with hard ends; it now fades out and thins towards the edges with
+  the line.
+- Blocks' glow now goes round their corners instead of leaving them dark.
+- The percentage next to the progress bar, and the NORMAL / PRACTICE rows
+  beside the bars in the level card and the pause menu, are centred on
+  their bars; the option names on their rows.
+- The analog stick (the PSP's nub) only works as a d-pad once it has been
+  seen near its centre: a PSP-1000's nub can read far off centre at boot
+  until it is moved, which pressed directions (and up jumps).
+- Uneven borders on the PS2 and PC: the resting cube's black frame came out
+  2 pixels wide on two sides and 3 on the others, and thin outlines
+  changed width as the level scrolled. Text, icons and thin lines are now
+  drawn on whole screen pixels in every build (1:1 on the PS2, the window's
+  scale on the PC), as on the PSP.
+
 ## [1.0.0] - 2026-10-03
 
 First release.

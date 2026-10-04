@@ -275,7 +275,7 @@ static void title_render(void)
     font_draw_fancy(SCREEN_W / 2, 30 + bob, 9.0f, RGB(255, 250, 200), RGB(255, 170, 40), RGB(20, 10, 0), 4.0f,
                     ALIGN_CENTER, GAME_TITLE);
     font_draw(SCREEN_W / 2, 104 + bob, 2.0f, col_with_alpha(COL_WHITE, 0.85f), ALIGN_CENTER,
-              "A RHYTHM PLATFORMER FOR PLAYSTATION 2");
+              "A RHYTHM PLATFORMER FOR " TARGET_NAME);
 
     static const Color cols[3] = {RGB(60, 190, 255), RGB(70, 220, 90), RGB(255, 150, 50)};
     static const char *labels[3] = {"GARAGE", "PLAY", "OPTIONS"};
@@ -289,7 +289,9 @@ static void title_render(void)
     }
     font_draw(SCREEN_W / 2, SCREEN_H - 20, 2.0f, col_with_alpha(COL_WHITE, 0.7f + 0.3f * sinf(g->t * 4.0f)),
               ALIGN_CENTER, GLYPH_LEFT GLYPH_RIGHT " SELECT   " GLYPH_CROSS " OK");
-    font_draw(SCREEN_W - 8, SCREEN_H - 12, 1.0f, col_with_alpha(COL_WHITE, 0.5f), ALIGN_RIGHT, g_version);
+    /* 5 px above the bottom edge (the font can come out taller on a pixel grid) */
+    font_draw(SCREEN_W - 8, SCREEN_H - 5 - font_height(1.0f), 1.0f, col_with_alpha(COL_WHITE, 0.5f), ALIGN_RIGHT,
+              g_version);
 }
 
 /* --- level select --------------------------------------------------- */
@@ -381,15 +383,17 @@ static void draw_level_card(int idx, float cx)
         }
     }
 
-    font_draw(x0 + 30, 232, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
+    float ty = font_center_y(232, 244, 2.0f); /* text beside the bars */
+    font_draw(x0 + 30, ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
     render_progress_bar(x0 + 140, 232, x1 - 80, 244, g->save.best[s] / 100.0f, RGB(90, 255, 120), RGB(210, 255, 210));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best[s]);
-    font_draw(x1 - 66, 232, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
-    font_draw(x0 + 30, 262, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
+    font_draw(x1 - 66, ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    ty = font_center_y(262, 274, 2.0f);
+    font_draw(x0 + 30, ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
     render_progress_bar(x0 + 140, 262, x1 - 80, 274, g->save.best_practice[s] / 100.0f, RGB(80, 200, 255),
                         RGB(210, 240, 255));
     snprintf(buf, sizeof(buf), "%d%%", g->save.best_practice[s]);
-    font_draw(x1 - 66, 262, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(x1 - 66, ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     if (g->save.best[s] >= 100) {
         font_draw_fancy(x1 - 20, 82, 2.0f, RGB(160, 255, 170), RGB(60, 220, 100), RGB(0, 0, 0), 2.0f, ALIGN_RIGHT,
                         "COMPLETE");
@@ -425,8 +429,8 @@ static void select_render(void)
     }
 
     float ap = 6.0f * sinf(g->t * 5.0f);
-    font_draw_fancy(30 - ap, 170, 5.0f, COL_WHITE, RGB(200, 210, 230), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, GLYPH_LEFT);
-    font_draw_fancy(SCREEN_W - 30 + ap, 170, 5.0f, COL_WHITE, RGB(200, 210, 230), RGB(0, 0, 0), 3.0f, ALIGN_CENTER,
+    font_draw_fancy(UI_X(30) - ap, 170, 5.0f, COL_WHITE, RGB(200, 210, 230), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, GLYPH_LEFT);
+    font_draw_fancy(UI_X(610) + ap, 170, 5.0f, COL_WHITE, RGB(200, 210, 230), RGB(0, 0, 0), 3.0f, ALIGN_CENTER,
                     GLYPH_RIGHT);
 
     for (int i = 0; i < n; i++) {
@@ -471,10 +475,10 @@ static void garage_render(void)
     font_draw_fancy(SCREEN_W / 2, 20, 4.0f, COL_WHITE, RGB(200, 220, 255), RGB(0, 0, 0), 3.0f, ALIGN_CENTER, "GARAGE");
 
     /* vehicle previews */
-    render_panel(60, 60, 580, 170, RGBA(0, 0, 0, 180), RGBA(255, 255, 255, 90));
+    render_panel(UI_X(60), 60, UI_X(580), 170, RGBA(0, 0, 0, 180), RGBA(255, 255, 255, 90));
     static const char *mnames[MODE_COUNT] = {"CUBE", "SHIP", "BALL", "UFO", "WAVE"};
     for (int m = 0; m < MODE_COUNT; m++) {
-        float cx = 112 + m * 104;
+        float cx = UI_X(112 + m * 104);
         int sel = m == g->garage_mode;
         float size = sel ? 52.0f : 38.0f;
         float ang = m == MODE_BALL ? g->t * 3.0f : (m == MODE_WAVE ? -0.6f : 0.0f);
@@ -488,20 +492,20 @@ static void garage_render(void)
     for (int r = 0; r < 3; r++) {
         float y = 200 + r * 72;
         int sel = g->garage_row == r;
-        render_panel(40, y - 6, 600, y + 58, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
-        font_draw(56, y + 2, 2.0f, sel ? COL_WHITE : RGB(160, 170, 190), ALIGN_LEFT, rows[r]);
+        render_panel(UI_X(40), y - 6, UI_X(600), y + 58, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
+        font_draw(UI_X(56), y + 2, 2.0f, sel ? COL_WHITE : RGB(160, 170, 190), ALIGN_LEFT, rows[r]);
         if (r == 0) {
             for (int i = 0; i < ICON_COUNT; i++) {
-                float cx = 80 + i * 66, cy = y + 37;
+                float cx = UI_X(80 + i * 66), cy = y + 37;
                 int on = g->save.icon == i;
                 if (on) gfx_rect(cx - 20, cy - 20, cx + 20, cy + 20, RGB(120, 255, 150));
                 icon_draw_cube(cx, cy, on ? 34 : 28, 0.0f, i, c1_of(), c2_of());
             }
-            font_draw(590, y + 2, 2.0f, RGB(255, 240, 160), ALIGN_RIGHT, g_icon_names[g->save.icon % ICON_COUNT]);
+            font_draw(UI_X(590), y + 2, 2.0f, RGB(255, 240, 160), ALIGN_RIGHT, g_icon_names[g->save.icon % ICON_COUNT]);
         } else {
             int cur = r == 1 ? g->save.col1 : g->save.col2;
             for (int i = 0; i < PLAYER_COLOR_COUNT; i++) {
-                float cx = 70 + i * 38, cy = y + 36;
+                float cx = UI_X(70 + i * 38), cy = y + 36;
                 int on = cur == i;
                 if (on) gfx_rect(cx - 17, cy - 17, cx + 17, cy + 17, COL_WHITE);
                 gfx_rect(cx - 14, cy - 14, cx + 14, cy + 14, RGB(0, 0, 0));
@@ -510,7 +514,7 @@ static void garage_render(void)
         }
     }
     font_draw_fancy(SCREEN_W / 2, SCREEN_H - 24, 2.0f, COL_WHITE, RGB(220, 230, 255), RGB(0, 0, 0), 2.0f, ALIGN_CENTER,
-                    GLYPH_LEFT GLYPH_RIGHT " CHANGE   L1/R1 PREVIEW   " GLYPH_CIRCLE " BACK");
+                    GLYPH_LEFT GLYPH_RIGHT " CHANGE   " BTN_NAME_L "/" BTN_NAME_R " PREVIEW   " GLYPH_CIRCLE " BACK");
 }
 
 /* --- options -------------------------------------------------------- */
@@ -586,11 +590,11 @@ static void options_tick(void)
  * are being heard; the player lines them up with the metronome's kick. */
 static void draw_delay_help(void)
 {
-    render_panel(60, 268, 580, 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
-    font_draw(80, 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "AUDIO DELAY");
-    font_draw(80, 304, 2.0f, COL_WHITE, ALIGN_LEFT, "LISTEN TO THE KICK, WATCH THE LIGHTS.");
-    font_draw(80, 322, 2.0f, COL_WHITE, ALIGN_LEFT, "KICK AFTER THE FLASH:  RAISE IT");
-    font_draw(80, 340, 2.0f, COL_WHITE, ALIGN_LEFT, "KICK BEFORE THE FLASH: LOWER IT");
+    render_panel(UI_X(60), 268, UI_X(580), 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
+    font_draw(UI_X(80), 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "AUDIO DELAY");
+    font_draw(UI_X(80), 304, 2.0f, COL_WHITE, ALIGN_LEFT, "LISTEN TO THE KICK, WATCH THE LIGHTS.");
+    font_draw(UI_X(80), 322, 2.0f, COL_WHITE, ALIGN_LEFT, "KICK AFTER THE FLASH:  RAISE IT");
+    font_draw(UI_X(80), 340, 2.0f, COL_WHITE, ALIGN_LEFT, "KICK BEFORE THE FLASH: LOWER IT");
     float b = audio_current_song() == SONG_METRONOME ? audio_song_beat() : -1.0f;
     int lit = b >= 0.0f ? (int)b % 4 : -1;
     float glow = b >= 0.0f ? expf(-(b - floorf(b)) * 6.0f) : 0.0f;
@@ -615,19 +619,19 @@ static void options_render(void)
     for (int i = 0; i < OPT_COUNT; i++) {
         float y = 66 + i * 40;
         int sel = g->options_sel == i;
-        render_panel(110, y - 7, 530, y + 29, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
+        render_panel(UI_X(110), y - 7, UI_X(530), y + 29, RGBA(0, 0, 0, sel ? 210 : 170), sel ? RGB(120, 255, 150) : RGBA(255, 255, 255, 60));
         Color tc = i == OPT_ERASE && g->erase_confirm ? RGB(255, 120, 120) : (sel ? COL_WHITE : RGB(170, 180, 200));
-        font_draw(130, y + 2, 3.0f, tc, ALIGN_LEFT, labels[i]);
+        font_draw(UI_X(130), font_center_y(y - 7, y + 29, 3.0f), 3.0f, tc, ALIGN_LEFT, labels[i]);
         if (i == OPT_MUSIC || i == OPT_SFX) {
             int v = i == OPT_MUSIC ? g->save.music_vol : g->save.sfx_vol;
             for (int k = 0; k < 10; k++) {
-                float x = 330 + k * 18;
+                float x = UI_X(330 + k * 18);
                 gfx_rect(x, y, x + 14, y + 22, k < v ? RGB(90, 255, 120) : RGBA(255, 255, 255, 50));
             }
         } else if (i == OPT_DELAY) {
             char val[24];
             snprintf(val, sizeof(val), sel ? GLYPH_LEFT " %+d MS " GLYPH_RIGHT : "%+d MS", g->save.audio_delay * 10);
-            font_draw(426, y + 6, 2.0f, tc, ALIGN_CENTER, val);
+            font_draw(UI_X(426), font_center_y(y - 7, y + 29, 2.0f), 2.0f, tc, ALIGN_CENTER, val);
         }
     }
     if (g->options_sel == OPT_DELAY) {
@@ -642,16 +646,16 @@ static void options_render(void)
         if (g->save.best[i] >= 100) done++;
         for (int k = 0; k < 3; k++) coins += (g->save.coins[i] >> k) & 1;
     }
-    render_panel(60, 268, 580, 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
-    font_draw(80, 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "CONTROLS");
-    font_draw(80, 304, 2.0f, COL_WHITE, ALIGN_LEFT, GLYPH_CROSS " / " GLYPH_CIRCLE " / UP / L1 / R1  JUMP, HOLD TO FLY");
-    font_draw(80, 322, 2.0f, COL_WHITE, ALIGN_LEFT, "START  PAUSE");
-    font_draw(80, 340, 2.0f, COL_WHITE, ALIGN_LEFT, "PRACTICE: " GLYPH_SQUARE " CHECKPOINT  " GLYPH_TRIANGLE " REMOVE");
-    font_draw(80, 368, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "STATS");
+    render_panel(UI_X(60), 268, UI_X(580), 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
+    font_draw(UI_X(80), 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "CONTROLS");
+    font_draw(UI_X(80), 304, 2.0f, COL_WHITE, ALIGN_LEFT, GLYPH_CROSS " / " GLYPH_CIRCLE " / UP / " BTN_NAME_L " / " BTN_NAME_R "  JUMP, HOLD TO FLY");
+    font_draw(UI_X(80), 322, 2.0f, COL_WHITE, ALIGN_LEFT, "START  PAUSE");
+    font_draw(UI_X(80), 340, 2.0f, COL_WHITE, ALIGN_LEFT, "PRACTICE: " GLYPH_SQUARE " CHECKPOINT  " GLYPH_TRIANGLE " REMOVE");
+    font_draw(UI_X(80), 368, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "STATS");
     snprintf(buf, sizeof(buf), "ATTEMPTS %u  JUMPS %u", (unsigned)g->save.total_attempts, (unsigned)g->save.total_jumps);
-    font_draw(80, 388, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(UI_X(80), 388, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     snprintf(buf, sizeof(buf), "LEVELS %d/%d  COINS %d", done, g_level_count, coins);
-    font_draw(80, 406, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
+    font_draw(UI_X(80), 406, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
 }
 
 void menus_tick(void)

@@ -6,6 +6,23 @@
 
 void draw_init(void);
 
+/*
+ * Pixel grid: device pixels per virtual pixel of the screen the game is
+ * shown on (0: none, draw anywhere). Builds start with their console's
+ * (PIXEL_GRID in common.h: 1 on the PS2, 272/448 on the PSP); the PC build
+ * sets its window's scale and pd_tool others for the pictures it draws.
+ * Text (font.c), icons (icons.c) and strokes (grid_w) are drawn on whole
+ * device pixels: a border 2.4 pixels wide would otherwise come out 2 or 3
+ * pixels wide depending on where it lands.
+ */
+void draw_set_pixel_grid(float g);
+float draw_pixel_grid(void);
+/* A stroke width as a whole number of device pixels (at least one) on the
+ * grid: it covers that many pixels wherever it lands. Unchanged without. */
+float grid_w(float w);
+/* v moved onto the nearest device pixel edge on the grid; unchanged without. */
+float grid_snap(float v);
+
 void draw_line(float x0, float y0, float x1, float y1, float w, Color c);
 void draw_line2(float x0, float y0, float x1, float y1, float w, Color c0, Color c1);
 void draw_rect_outline(float x0, float y0, float x1, float y1, float w, Color c);

@@ -4,12 +4,15 @@
  *   pd_tool check                       parse every level and song, report stats
  *   pd_tool solve <level|all> [K]       prove levels are beatable (inputs change
  *                                       at most every K ticks, all phases)
- *   pd_tool shot <level> <sec> <out.bmp> [practice]
+ *   pd_tool shot <level> <sec> <out.bmp> [practice] [width]
  *                                       screenshot of the level at time sec,
- *                                       played by the solver
- *   pd_tool menu <title|select|garage|options|delay|pause> <out.bmp> [sec]
+ *                                       played by the solver (images are PNG
+ *                                       when the name ends in .png)
+ *   pd_tool menu <title|select|garage|options|delay|pause> <out.bmp> [sec] [width]
  *                                       a menu screen, sec seconds after it opened
  *   pd_tool overview <level> <out.bmp>  whole-level map with the solver path
+ *   pd_tool xmb <icon0.png> <pic1.png>  the PSP menu's icon (144x80) and background
+ *                                       (480x272) for the game (build with PSP=1)
  *   pd_tool wav <song> <seconds> <out.wav>
  *   pd_tool smoke                       drive the full game through menus and a
  *                                       level with scripted input
@@ -46,10 +49,12 @@
 #include <string.h>
 
 #include "gfx_sdl.h"
+#include "png_write.h"
 #include "../core/audio.h"
 #include "../core/draw.h"
 #include "../core/font.h"
 #include "../core/game_internal.h"
+#include "../core/icons.h"
 #include "../core/platform.h"
 #include "../core/songdata.h"
 
@@ -400,20 +405,56 @@ static SDL_Renderer *s_ren;
 
 static void offscreen_init(int w, int h)
 {
+    if (s_ren) SDL_DestroyRenderer(s_ren);
+    if (s_surf) SDL_FreeSurface(s_surf);
     s_surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
     s_ren = SDL_CreateSoftwareRenderer(s_surf);
+}
+
+/* Images are drawn this many times larger than they are saved, and
+ * averaged down (the PSP's menu pictures, see cmd_xmb). */
+static int s_supersample = 1;
+
+/* Save a surface as PNG if the name ends in .png, else as BMP. */
+static int save_image(SDL_Surface *surf, const char *out)
+{
+    size_t n = strlen(out);
+    if (n < 4 || (strcmp(out + n - 4, ".png") && strcmp(out + n - 4, ".PNG"))) return SDL_SaveBMP(surf, out);
+    int k = s_supersample, w = surf->w / k, h = surf->h / k;
+    uint8_t *rgb = malloc((size_t)w * (size_t)h * 3);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            unsigned sum[3] = {0, 0, 0};
+            for (int sy = 0; sy < k; sy++) {
+                const Uint32 *row = (const Uint32 *)((const Uint8 *)surf->pixels + (y * k + sy) * surf->pitch);
+                for (int sx = 0; sx < k; sx++) {
+                    Uint8 c[3];
+                    SDL_GetRGB(row[x * k + sx], surf->format, &c[0], &c[1], &c[2]);
+                    for (int i = 0; i < 3; i++) sum[i] += c[i];
+                }
+            }
+            Uint8 *d = rgb + ((size_t)y * w + x) * 3;
+            for (int i = 0; i < 3; i++) d[i] = (Uint8)((sum[i] + (unsigned)(k * k) / 2) / (unsigned)(k * k));
+        }
+    }
+    int r = png_write_rgb(out, rgb, w, h);
+    free(rgb);
+    if (r != 0) SDL_SetError("cannot write %s", out);
+    return r;
 }
 
 static void render_frame(const char *out)
 {
     SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
     SDL_RenderClear(s_ren);
-    gfx_sdl_begin(s_ren, (float)s_surf->w / SCREEN_W, (float)s_surf->h / SCREEN_H);
+    /* one scale both ways, as on the PSP (its 480 pixels show 479.6 of them) */
+    float k = (float)s_surf->h / SCREEN_H;
+    gfx_sdl_begin(s_ren, k, k);
     game_render(1.0f);
     gfx_sdl_flush();
     SDL_RenderPresent(s_ren);
     const GfxStats *st = gfx_sdl_stats();
-    if (SDL_SaveBMP(s_surf, out) != 0) fprintf(stderr, "save failed: %s\n", SDL_GetError());
+    if (save_image(s_surf, out) != 0) fprintf(stderr, "save failed: %s\n", SDL_GetError());
     else printf("wrote %s (%d tris, %d quads, %d rects)\n", out, st->tris, st->quads, st->rects);
 }
 
@@ -574,7 +615,7 @@ static int cmd_overview(int idx, const char *out)
             printf("solver dies at x=%.2f y=%.2f\n", p.x, p.y);
         }
     }
-    SDL_SaveBMP(surf, out);
+    save_image(surf, out);
     printf("wrote %s (%s)\n", out, sol_ticks > 0 ? "with path" : "no solution");
     level_free(L);
     return 0;
@@ -1052,7 +1093,7 @@ static int cmd_palettes(const char *out, float min_ratio)
     }
     SDL_RenderSetViewport(s_ren, NULL);
     SDL_RenderPresent(s_ren);
-    SDL_SaveBMP(s_surf, out);
+    save_image(s_surf, out);
     printf("wrote %s\n", out);
     level_free(L);
     return bad;
@@ -1249,6 +1290,76 @@ static int cmd_demo(int gen)
     return bad;
 }
 
+/* ------------------------------------------------------------------ */
+/* PSP menu pictures                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * ICON0 (144x80) is the game's tile in the PSP's menu: the logo over a cube
+ * running past spikes, drawn at half the virtual size with the font on the
+ * icon's own pixel grid. PIC1 (480x272) is the background while the tile is
+ * selected: a frame of a level, drawn as the PSP shows it. Both are drawn
+ * four times larger and averaged down: SDL's software renderer leaves out
+ * pixels on the diagonal between a quad's triangles, and the averaging
+ * hides that while the text stays on whole pixels.
+ */
+static int cmd_xmb(const char *icon0, const char *pic1)
+{
+#ifndef PD_PSP
+    (void)icon0;
+    (void)pic1;
+    fprintf(stderr, "xmb: needs the PSP layout (make -f Makefile.host PSP=1)\n");
+    return 1;
+#else
+    static const char *const scene[] = {
+        "#name icon",
+        "|                 ",
+        "|        ^^    ## ",
+        "",
+        NULL,
+    };
+    Level *L = level_parse(scene);
+    SaveData sd;
+    save_defaults(&sd);
+    Color c1 = g_player_colors[sd.col1], c2 = g_player_colors[sd.col2];
+    const Palette *pal = &g_palettes[0];
+
+    const int k = 4;
+    s_supersample = k;
+    offscreen_init(144 * k, 80 * k);
+    SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
+    SDL_RenderClear(s_ren);
+    gfx_sdl_begin(s_ren, 0.5f * k, 0.5f * k);
+    /* the icon shows x 250-538 of the screen, clear of the ground line's
+     * fade towards the screen edges */
+    const float x0 = 250.0f;
+    gfx_sdl_offset(-x0, 0.0f);
+    draw_set_pixel_grid(0.5f);
+    View v = {-5.2f, -9.2f, 0.4f, 0.6f, pal}; /* ground 66 px down the icon */
+    render_background(&v);
+    render_ground(&v, 0.0f, CORRIDOR_H, 0.0f);
+    render_level(&v, L, NULL, 0);
+    /* the cube mid-jump, just before the spikes */
+    float cx = view_sx(&v, 5.9f), cy = view_sy(&v, 1.7f);
+    draw_glow(cx, cy, BLOCK_PX * 1.4f, col_with_alpha(c1, 0.35f));
+    icon_draw_cube(cx, cy, BLOCK_PX, 0.45f, sd.icon, c1, c2);
+    font_draw_fancy(x0 + 144, 18, 4.0f, RGB(255, 250, 200), RGB(255, 170, 40), RGB(20, 10, 0), 2.0f, ALIGN_CENTER,
+                    GAME_TITLE);
+    gfx_sdl_flush();
+    SDL_RenderPresent(s_ren);
+    draw_set_pixel_grid(PIXEL_GRID);
+    level_free(L);
+    if (save_image(s_surf, icon0) != 0) {
+        fprintf(stderr, "save failed: %s\n", SDL_GetError());
+        return 1;
+    }
+    printf("wrote %s\n", icon0);
+
+    offscreen_init(480 * k, 272 * k);
+    return cmd_shot(5, 30.0f, pic1, 0);
+#endif
+}
+
 static int cmd_prof(int idx)
 {
     if (get_solution(idx) < 0) printf("warning: no solution, playing with no input\n");
@@ -1330,17 +1441,18 @@ int main(int argc, char **argv)
         return fails ? 1 : 0;
     }
     if (!strcmp(cmd, "shot") && argc >= 5) {
-        offscreen_init(argc > 6 ? atoi(argv[6]) : 1280, argc > 6 ? atoi(argv[6]) * 448 / 640 : 896);
+        offscreen_init(argc > 6 ? atoi(argv[6]) : SCREEN_W * 2, argc > 6 ? atoi(argv[6]) * SCREEN_H / SCREEN_W : SCREEN_H * 2);
         return cmd_shot(level_arg(argv[2]), (float)atof(argv[3]), argv[4], argc > 5 && atoi(argv[5]));
     }
     if (!strcmp(cmd, "menu") && argc >= 4) {
-        offscreen_init(1280, 896);
+        offscreen_init(argc > 5 ? atoi(argv[5]) : SCREEN_W * 2, argc > 5 ? atoi(argv[5]) * SCREEN_H / SCREEN_W : SCREEN_H * 2);
         return cmd_menu(argv[2], argv[3], argc > 4 ? (float)atof(argv[4]) : 0.0f);
     }
     if (!strcmp(cmd, "overview") && argc >= 4) return cmd_overview(level_arg(argv[2]), argv[3]);
     if (!strcmp(cmd, "wav") && argc >= 5) return cmd_wav(atoi(argv[2]), (float)atof(argv[3]), argv[4]);
     if (!strcmp(cmd, "smoke")) return cmd_smoke() ? 1 : 0;
     if (!strcmp(cmd, "prof") && argc >= 3) return cmd_prof(level_arg(argv[2]));
+    if (!strcmp(cmd, "xmb") && argc >= 4) return cmd_xmb(argv[2], argv[3]);
     if (!strcmp(cmd, "ruler") && argc >= 3) return cmd_ruler(level_arg(argv[2]));
     if (!strcmp(cmd, "palettes") && argc >= 3) return cmd_palettes(argv[2], argc > 3 ? (float)atof(argv[3]) : 0.0f) ? 1 : 0;
     if (!strcmp(cmd, "demo")) return cmd_demo(argc > 2 && !strcmp(argv[2], "gen")) ? 1 : 0;

@@ -16,8 +16,37 @@
 
 #define GAME_TITLE "PULSE DASH"
 
+/*
+ * Target profile. The default is the PS2's (the PC build plays the same):
+ * a 640x448 virtual screen. PD_PSP selects the PSP's: its 480x272 screen is
+ * wider, so the virtual screen is too (levels show more of what is ahead,
+ * menus laid out for 640 stay centred through UI_X), the screen is scaled
+ * down to the LCD, and help texts name the PSP's buttons.
+ *
+ * PIXEL_GRID is how many of the console's screen pixels one virtual pixel
+ * covers: text, icons and thin lines are drawn on whole screen pixels so
+ * they stay sharp and even (draw.h).
+ */
+#ifdef PD_PSP
+#define SCREEN_W 790 /* 448 * 480 / 272, rounded down */
+#define TARGET_NAME "PSP"
+#define BTN_NAME_L "L"
+#define BTN_NAME_R "R"
+/* device pixels per virtual pixel, across and down: the 790 virtual pixels
+ * across come to 479.6 of the LCD's 480 */
+#define PIXEL_GRID (272.0f / SCREEN_H)
+#else
 #define SCREEN_W 640
+#define TARGET_NAME "PLAYSTATION 2"
+#define BTN_NAME_L "L1"
+#define BTN_NAME_R "R1"
+#define PIXEL_GRID 1.0f /* the GS draws the virtual screen 1:1 */
+#endif
 #define SCREEN_H 448
+
+/* x in a layout drawn for a 640-wide screen, centred on this one */
+#define UI_X(x) ((x) + (SCREEN_W - 640) / 2)
+
 #define TICK_HZ 60
 #define TICK_DT (1.0f / TICK_HZ)
 
@@ -60,6 +89,27 @@ enum {
     BTN_START = 1u << 12,
     BTN_SELECT = 1u << 13
 };
+
+/*
+ * An analog stick as a d-pad (0-255 an axis, 128 the centre): directions
+ * well off centre only, and only once the stick has been seen near the
+ * centre. Some read far off centre until first moved (a PSP-1000's nub,
+ * at boot), which would press directions, and up jumps. *armed keeps that
+ * state for the stick.
+ */
+static inline uint32_t stick_dpad(int x, int y, int *armed)
+{
+    if (!*armed) {
+        if (x < 0x50 || x > 0xB0 || y < 0x50 || y > 0xB0) return 0;
+        *armed = 1;
+    }
+    uint32_t b = 0;
+    if (x < 0x30) b |= BTN_LEFT;
+    if (x > 0xD0) b |= BTN_RIGHT;
+    if (y < 0x30) b |= BTN_UP;
+    if (y > 0xD0) b |= BTN_DOWN;
+    return b;
+}
 
 static inline float clampf(float v, float lo, float hi)
 {

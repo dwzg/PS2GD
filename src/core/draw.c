@@ -14,6 +14,34 @@ void draw_init(void)
     }
 }
 
+static float s_grid = PIXEL_GRID;
+
+void draw_set_pixel_grid(float g)
+{
+    s_grid = g;
+}
+
+float draw_pixel_grid(void)
+{
+    return s_grid;
+}
+
+float grid_w(float w)
+{
+    if (s_grid <= 0.0f) return w;
+    float n = floorf(w * s_grid + 0.5f);
+    return (n < 1.0f ? 1.0f : n) / s_grid;
+}
+
+/* A sixty-fourth of a pixel past the edge: rounding errors stay on that side
+ * of it, so renderers that truncate positions (SDL's software one) or round
+ * them to a sixteenth of a pixel (the PSP's) put the edge right on it. */
+float grid_snap(float v)
+{
+    if (s_grid <= 0.0f) return v;
+    return (floorf(v * s_grid + 0.5f) + 1.0f / 64.0f) / s_grid;
+}
+
 /* Pick a step through the circle table based on on-screen radius. */
 static int seg_step(float r)
 {
@@ -25,6 +53,7 @@ static int seg_step(float r)
 
 void draw_line2(float x0, float y0, float x1, float y1, float w, Color c0, Color c1)
 {
+    w = grid_w(w);
     float dx = x1 - x0, dy = y1 - y0;
     float len = sqrtf(dx * dx + dy * dy);
     if (len < 0.0001f) return;
@@ -41,6 +70,7 @@ void draw_line(float x0, float y0, float x1, float y1, float w, Color c)
 
 void draw_rect_outline(float x0, float y0, float x1, float y1, float w, Color c)
 {
+    w = grid_w(w);
     gfx_rect(x0, y0, x1, y0 + w, c);
     gfx_rect(x0, y1 - w, x1, y1, c);
     gfx_rect(x0, y0 + w, x0 + w, y1 - w, c);

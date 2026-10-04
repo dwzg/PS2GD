@@ -3,12 +3,13 @@
 #include <string.h>
 
 #include "gfx_sdl.h"
-#include "../core/gfx.h"
+#include "../core/draw.h"
 
 #define MAX_VERTS 98304
 
 static SDL_Renderer *s_r;
 static float s_sx = 1.0f, s_sy = 1.0f;
+static float s_ox, s_oy;
 static SDL_Vertex s_v[MAX_VERTS];
 static int s_n;
 static int s_blend = BLEND_ALPHA;
@@ -19,10 +20,17 @@ void gfx_sdl_begin(SDL_Renderer *r, float scale_x, float scale_y)
     s_r = r;
     s_sx = scale_x;
     s_sy = scale_y;
+    s_ox = s_oy = 0.0f;
     s_n = 0;
     s_blend = BLEND_ALPHA;
     memset(&s_stats, 0, sizeof(s_stats));
     if (r) SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+}
+
+void gfx_sdl_offset(float dx, float dy)
+{
+    s_ox = dx;
+    s_oy = dy;
 }
 
 const GfxStats *gfx_sdl_stats(void)
@@ -42,8 +50,15 @@ void gfx_sdl_flush(void)
 static inline void put(float x, float y, Color c)
 {
     SDL_Vertex *v = &s_v[s_n++];
-    v->position.x = x * s_sx;
-    v->position.y = y * s_sy;
+    v->position.x = (x + s_ox) * s_sx;
+    v->position.y = (y + s_oy) * s_sy;
+    if (draw_pixel_grid() > 0.0f) {
+        /* a sixteenth of a pixel, like the PSP's GE: shapes put on whole
+         * pixels stay whole (SDL's software renderer cuts a pixel off a
+         * rectangle 19.99998 pixels tall) */
+        v->position.x = roundf(v->position.x * 16.0f) / 16.0f;
+        v->position.y = roundf(v->position.y * 16.0f) / 16.0f;
+    }
     v->color.r = (Uint8)COL_R(c);
     v->color.g = (Uint8)COL_G(c);
     v->color.b = (Uint8)COL_B(c);

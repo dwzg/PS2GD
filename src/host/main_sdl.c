@@ -11,6 +11,7 @@
 
 #include "gfx_sdl.h"
 #include "../core/audio.h"
+#include "../core/draw.h"
 #include "../core/game.h"
 #include "../core/platform.h"
 
@@ -93,7 +94,7 @@ int main(int argc, char **argv)
         SDL_free(pref);
     }
 
-    SDL_Window *win = SDL_CreateWindow(GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 896,
+    SDL_Window *win = SDL_CreateWindow(GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_W * 2, SCREEN_H * 2,
                                        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
@@ -151,13 +152,14 @@ int main(int argc, char **argv)
         SDL_GetRendererOutputSize(ren, &w, &h);
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
-        /* letterbox to 640:448 */
+        /* letterbox to the virtual screen's shape */
         float scale = (float)w / SCREEN_W;
         if (SCREEN_H * scale > h) scale = (float)h / SCREEN_H;
         SDL_Rect vp = {(int)((w - SCREEN_W * scale) / 2), (int)((h - SCREEN_H * scale) / 2),
                        (int)(SCREEN_W * scale), (int)(SCREEN_H * scale)};
         SDL_RenderSetViewport(ren, &vp);
         gfx_sdl_begin(ren, scale, scale);
+        draw_set_pixel_grid(scale); /* text and lines on whole window pixels */
         game_render((float)(1.0 - ahead * TICK_HZ));
         gfx_sdl_flush();
         SDL_RenderSetViewport(ren, NULL);
