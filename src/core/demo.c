@@ -82,6 +82,14 @@ static const DemoPress DEMO_PRESSES[] = {
 
 #define NPRESS ((int)(sizeof(DEMO_PRESSES) / sizeof(DEMO_PRESSES[0])))
 
+int demo_press_count(void) { return NPRESS; }
+
+void demo_press(int i, float *x0, float *x1)
+{
+    *x0 = DEMO_PRESSES[i].x0;
+    *x1 = DEMO_PRESSES[i].x1;
+}
+
 const char *const *demo_level_src(void)
 {
     enum { NART = sizeof(DEMO_ART) / sizeof(DEMO_ART[0]) - 1, MAXROWS = 8 };
@@ -147,11 +155,11 @@ static int demo_button(float x, float last_x)
 
 static void step(Runner *r, const Level *L)
 {
-    int h = demo_button(r->p->x, r->last_x);
-    r->last_x = r->p->x;
+    int h = demo_button(sim_x(r->p), r->last_x);
+    r->last_x = sim_x(r->p);
     sim_tick(r->p, L, h, h && !r->held);
     r->held = h;
-    int k = (int)floorf(r->p->x / SNAP_EVERY);
+    int k = (int)floorf(sim_x(r->p) / SNAP_EVERY);
     if (k >= 0 && k < NSNAP && !s_snap[k].valid && floorf(r->last_x / SNAP_EVERY) < k && !r->p->dead) {
         DemoSnap *sn = &s_snap[k];
         sn->p = *r->p;
@@ -177,21 +185,21 @@ static void seek(PlayState *ps, float x)
     if (x >= DEMO_LOOP) x -= DEMO_LOOP; /* the same place on the first time round */
     Runner r = {&ps->p, 0.0f, 0};
     sim_reset(&ps->p, ps->L);
-    r.last_x = ps->p.x;
+    r.last_x = sim_x(&ps->p);
     for (int k = mini((int)(x / SNAP_EVERY), NSNAP - 1); k >= 0; k--) {
         const DemoSnap *sn = &s_snap[k];
-        if (sn->valid && sn->p.x <= x) {
+        if (sn->valid && sim_x(&sn->p) <= x) {
             ps->p = sn->p;
             r.last_x = sn->last_x;
             r.held = sn->held;
             break;
         }
     }
-    while (ps->p.x < x && !ps->p.dead) step(&r, ps->L);
+    while (sim_x(&ps->p) < x && !ps->p.dead) step(&r, ps->L);
     if (ps->p.dead) { /* a bad press table: stop following the music */
         s_broken = 1;
         sim_reset(&ps->p, ps->L);
-        r.last_x = ps->p.x;
+        r.last_x = sim_x(&ps->p);
         r.held = 0;
     }
     s_main_last_x = r.last_x;
@@ -199,9 +207,10 @@ static void seek(PlayState *ps, float x)
     play_place(ps);
 }
 
-static void shift(PlayState *ps, float dx)
+/* dx: whole blocks */
+static void shift(PlayState *ps, int dx)
 {
-    ps->p.x += dx;
+    ps->p.x += dx * SIM_ONE;
     ps->prev_x += dx;
     ps->cam_x += dx;
     ps->prev_cam_x += dx;
@@ -218,33 +227,33 @@ int demo_tick(PlayState *ps, const float *beat)
         ps->L = level_parse(demo_level_src());
         if (!ps->L) return 0;
         sim_reset(&s_ahead, ps->L);
-        s_ahead_last_x = s_ahead.x;
+        s_ahead_last_x = sim_x(&s_ahead);
         s_ahead_held = 0;
         s_ahead_on = 1;
         seek(ps, beat ? x_of_beat(*beat) : 0.0f);
     }
     if (s_ahead_on) {
         Runner r = {&s_ahead, s_ahead_last_x, s_ahead_held};
-        for (int i = 0; i < AHEAD_TICKS && s_ahead.x < DEMO_LOOP && !s_ahead.dead; i++) step(&r, ps->L);
+        for (int i = 0; i < AHEAD_TICKS && sim_x(&s_ahead) < DEMO_LOOP && !s_ahead.dead; i++) step(&r, ps->L);
         s_ahead_last_x = r.last_x;
         s_ahead_held = r.held;
-        s_ahead_on = s_ahead.x < DEMO_LOOP && !s_ahead.dead;
+        s_ahead_on = sim_x(&s_ahead) < DEMO_LOOP && !s_ahead.dead;
     }
     play_begin_tick(ps);
     if (beat) {
         /* follow the music: jump to it if far off (the song restarted),
          * else steer gently, which also hides the audio clock's jitter */
-        float target = x_of_beat(*beat), d = target - ps->p.x;
+        float target = x_of_beat(*beat), d = target - sim_x(&ps->p);
         d -= DEMO_LOOP * floorf(d / DEMO_LOOP + 0.5f);
         if (fabsf(d) > 1.5f) seek(ps, target);
-        else ps->p.x += clampf(d * 0.03f, -0.01f, 0.01f);
+        else ps->p.x += (int32_t)(clampf(d * 0.03f, -0.01f, 0.01f) * SIM_ONE);
     }
     Runner r = {&ps->p, s_main_last_x, s_main_held};
     step(&r, ps->L);
     s_main_last_x = r.last_x;
     s_main_held = r.held;
     play_end_tick(ps);
-    if (ps->p.x >= DEMO_WRAP) shift(ps, -(float)DEMO_LOOP);
+    if (sim_x(&ps->p) >= DEMO_WRAP) shift(ps, -DEMO_LOOP);
     if (ps->p.dead) {
         seek(ps, beat ? x_of_beat(*beat) : DEMO_WRAP - DEMO_LOOP);
         return 1;

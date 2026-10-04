@@ -139,7 +139,7 @@ const char *const LEVEL_PRISM_OVERDRIVE[] = {
 "|                                       ",
 "|                                       ",
 "|         ###                 S         ",
-"|     ^^  ###        ^^^                ",
+"|      ^^ ###        ^^^                ",
 "",
 /* final ship */
 "|    #####     #####     #####    #######",

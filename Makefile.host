@@ -16,7 +16,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 SDL_CFLAGS := $(shell sdl2-config --cflags)
 SDL_LIBS := $(shell sdl2-config --libs)
 CFLAGS ?= -O2 -g
-CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion $(SDL_CFLAGS)
+CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion -Isrc/host $(SDL_CFLAGS)
 LDLIBS := $(SDL_LIBS) -lm
 
 ifeq ($(PSP),1)
@@ -25,11 +25,11 @@ OUT := build/host-psp
 else
 OUT := build/host
 endif
-CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c)
+include sources.mk
 CORE_OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC))
 GAME_OBJ := $(OUT)/host/main_sdl.o $(OUT)/host/gfx_sdl.o
-TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o
-GBC_TOOL_OBJ := $(OUT)/host/gbc_tool.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o \
+TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/solver.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o
+GBC_TOOL_OBJ := $(OUT)/host/gbc_tool.o $(OUT)/host/solver.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o \
                 $(OUT)/gbc/gbsim.o $(OUT)/gbc/gbcells.o $(OUT)/gbc/tileset.o
 
 all: $(OUT)/pulsedash $(OUT)/pd_tool
@@ -50,7 +50,7 @@ $(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
 $(OUT)/core/version.o: FORCE
 FORCE:
 
-$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h)
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h) src/ps2/target.h src/psp/target.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

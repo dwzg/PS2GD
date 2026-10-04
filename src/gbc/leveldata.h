@@ -19,6 +19,7 @@ typedef struct {
     uint8_t ncoins;
     uint8_t bank;   /* ROM bank holding the cells */
     uint8_t ntrig;
+    uint8_t id;     /* the game's number for the level (src/levels/levels.c) */
     uint16_t width;
     const uint8_t *cells; /* GS_ROWS tiles a column, in `bank` */
     const GbTrigger *trig;

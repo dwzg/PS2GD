@@ -11,7 +11,7 @@
 #include "gbc.h"
 
 volatile uint8_t g_scx;
-uint8_t g_hud_split;
+uint8_t g_hud_split, g_title_split;
 
 /* palettes to upload (palette.c builds them) */
 uint16_t g_bgpal[32];
@@ -30,13 +30,15 @@ static uint8_t s_cellq_x[CELLQ], s_cellq_y[CELLQ], s_cellq_t[CELLQ], s_cellq_a[C
 static uint8_t s_saw[SAW_FRAMES][16];
 static uint8_t s_saw_pending = 0xff;
 
-/* LY = 7: below the progress bar row, scroll the level. Waits for the
- * horizontal blank so line 8 starts with the new value. */
+/* LY = 7: below the progress bar row, scroll the level (on the title,
+ * LY = 79: below the logo and the menu, show the level's map, scrolled).
+ * Waits for the horizontal blank so the next line starts with it. */
 static void lcd_isr(void)
 {
     while (STAT_REG & 3)
         ;
     SCX_REG = g_scx;
+    if (g_title_split) LCDC_REG &= ~LCDCF_BG9C00;
 }
 
 volatile uint8_t g_vbl_count;
@@ -64,7 +66,12 @@ static void vbl_isr(void)
 #ifdef PD_PERF
     s_perf_lines += 154;
 #endif
-    SCX_REG = g_hud_split ? 0 : g_scx;
+    if (g_title_split) {
+        LCDC_REG |= LCDCF_BG9C00;
+        SCX_REG = 0;
+    } else {
+        SCX_REG = g_hud_split ? 0 : g_scx;
+    }
 }
 
 /* Write a VRAM byte as soon as the LCD isn't reading it (if an interrupt
@@ -79,6 +86,27 @@ static void vput(uint8_t *a, uint8_t v)
 void video_off(void)
 {
     if (LCDC_REG & LCDCF_ON) display_off();
+}
+
+/* The screen black from the next frame, the LCD left on: a Game Boy
+ * Color's LCD shows white while it is off. Every background palette goes
+ * black and the sprites are hidden; what is drawn meanwhile is written as
+ * the LCD allows (vput, vram_put), and the next screen's palettes go up
+ * with its first frame (video_vblank). */
+void video_blank(void)
+{
+    uint8_t k;
+    if (!(LCDC_REG & LCDCF_ON)) return;
+    pal_black();
+    for (k = 0; k < 40; k++) hide_sprite(k);
+    video_flush();
+}
+
+/* video_vblank's work in the next vertical blank (at once with the LCD off) */
+void video_flush(void)
+{
+    if (LCDC_REG & LCDCF_ON) wait_vbl_done();
+    video_vblank();
 }
 
 void video_on(void)
@@ -121,14 +149,37 @@ void video_init(void)
     STAT_REG = 0x40; /* interrupt on LY == LYC */
     set_interrupts(VBL_IFLAG | LCD_IFLAG);
     pal_sprites();
+    video_icon(g_save.icon);
 }
 
-void video_logo(uint8_t y0)
+void video_icon(uint8_t icon)
+{
+    uint8_t bank = _current_bank, *d = (uint8_t *)(0x8000 + ST_CUBE * 16);
+    const uint8_t *s;
+    uint16_t n = CUBE_FRAMES * 4 * 16;
+    if (icon >= ICON_COUNT) icon = 0;
+    SWITCH_ROM_MBC5(GBC_BANK_GFX);
+    s = gfx_icons + (uint16_t)icon * (CUBE_FRAMES * 4 * 16);
+    VBK_REG = 1;
+    if (LCDC_REG & LCDCF_ON) {
+        while (n--) vput(d++, *s++);
+    } else {
+        memcpy(d, s, n);
+    }
+    VBK_REG = 0;
+    SWITCH_ROM_MBC5(bank);
+}
+
+void video_logo(uint8_t y0, uint8_t win)
 {
     uint8_t x, y, bank = _current_bank;
     SWITCH_ROM_MBC5(GBC_BANK_GFX);
     for (y = 0; y < GFX_LOGO_H; y++)
-        for (x = 0; x < GFX_LOGO_W; x++) tile_bkg(x, y0 + y, gfx_logo_map[y * GFX_LOGO_W + x], PAL_TEXT);
+        for (x = 0; x < GFX_LOGO_W; x++) {
+            uint8_t t = gfx_logo_map[y * GFX_LOGO_W + x];
+            if (win) tile_win(x, y0 + y, t, PAL_TEXT);
+            else tile_bkg(x, y0 + y, t, PAL_TEXT);
+        }
     SWITCH_ROM_MBC5(bank);
 }
 
@@ -139,14 +190,97 @@ void bkg_clear(void)
 
 /* --- the vblank's work --- */
 
+/* The vertical blank is 10 scanlines: what is written then is written in
+ * assembly (SDCC's loops took twice that, and past it every byte waits for
+ * the LCD, and palette writes while it draws are lost). */
+
+/* the background (64 bytes) or sprite (24) palettes */
+static void bg_pal_upload(void) __naked
+{
+    __asm
+    ld c, #0x68 ; BCPS, then BCPD
+    ld a, #0x80
+    ldh (c), a
+    inc c
+    ld hl, #_g_bgpal
+    ld b, #64
+1$:
+    ld a, (hl+)
+    ldh (c), a
+    dec b
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
+static void obj_pal_upload(void) __naked
+{
+    __asm
+    ld c, #0x6a ; OCPS, then OCPD
+    ld a, #0x80
+    ldh (c), a
+    inc c
+    ld hl, #_g_objpal
+    ld b, #24
+1$:
+    ld a, (hl+)
+    ldh (c), a
+    dec b
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
+/* s_put_n bytes from s_put_src to VRAM at s_put_dst, s_put_step apart (1 or
+ * 32), each when the LCD allows (as vput) */
+static uint8_t *s_put_dst;
+static const uint8_t *s_put_src;
+static uint8_t s_put_n, s_put_step;
+
+static void vram_put(void) __naked
+{
+    __asm
+    ld hl, #_s_put_src
+    ld a, (hl+)
+    ld e, a
+    ld d, (hl)
+    ld a, (_s_put_step)
+    ld c, a
+    ld a, (_s_put_n)
+    ld b, a
+    ld hl, #_s_put_dst
+    ld a, (hl+)
+    ld h, (hl)
+    ld l, a
+1$:
+    ldh a, (_STAT_REG + 0)
+    and a, #2
+    jr nz, 1$
+    ld a, (de)
+    ld (hl), a
+    inc de
+    ld a, l
+    add a, c
+    ld l, a
+    jr nc, 2$
+    inc h
+2$:
+    dec b
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
 static void put_col(uint8_t x, const uint8_t *t, const uint8_t *a)
 {
-    uint8_t *v = (uint8_t *)0x9820 + x; /* map row 1 */
-    uint8_t i;
-    for (i = 0; i < COL_ROWS; i++, v += 32) vput(v, t[i]);
-    v -= 32 * COL_ROWS;
+    s_put_dst = (uint8_t *)0x9820 + x; /* map row 1 */
+    s_put_src = t;
+    s_put_n = COL_ROWS;
+    s_put_step = 32;
+    vram_put();
     VBK_REG = 1;
-    for (i = 0; i < COL_ROWS; i++, v += 32) vput(v, a[i]);
+    s_put_src = a;
+    vram_put();
     VBK_REG = 0;
 }
 
@@ -154,20 +288,26 @@ void video_vblank(void)
 {
     uint8_t i;
     if (g_pal_dirty & 1) {
+        bg_pal_upload();
+    } else if (g_pal_dirty & 4) {
+        /* only the beat's flash: block edges, ground line (colour 2 of
+         * palettes 0 and 1) */
         const uint8_t *p = (const uint8_t *)g_bgpal;
-        BCPS_REG = 0x80;
-        for (i = 0; i < 64; i++) BCPD_REG = p[i];
+        BCPS_REG = 0x80 | 4;
+        BCPD_REG = p[4];
+        BCPD_REG = p[5];
+        BCPS_REG = 0x80 | 12;
+        BCPD_REG = p[12];
+        BCPD_REG = p[13];
     }
-    if (g_pal_dirty & 2) {
-        const uint8_t *p = (const uint8_t *)g_objpal;
-        OCPS_REG = 0x80;
-        for (i = 0; i < 24; i++) OCPD_REG = p[i];
-    }
+    if (g_pal_dirty & 2) obj_pal_upload();
     g_pal_dirty = 0;
     if (s_saw_pending != 0xff) {
-        uint8_t *v = (uint8_t *)0x8000 + T_SAW * 16;
-        const uint8_t *src = s_saw[s_saw_pending];
-        for (i = 0; i < 16; i++) vput(v + i, src[i]);
+        s_put_dst = (uint8_t *)0x8000 + T_SAW * 16;
+        s_put_src = s_saw[s_saw_pending];
+        s_put_n = 16;
+        s_put_step = 1;
+        vram_put();
         s_saw_pending = 0xff;
     }
     for (i = 0; i < s_colq_n; i++) put_col(s_colq_x[i], s_colq_t[i], s_colq_a[i]);
@@ -186,6 +326,7 @@ void col_queue(uint8_t mapx, const uint8_t *tiles, const uint8_t *attrs)
 }
 
 uint8_t col_queue_free(void) { return COLQ - s_colq_n; }
+uint8_t cell_queue_free(void) { return CELLQ - s_cellq_n; }
 
 void cell_queue(uint8_t mapx, uint8_t mapy, uint8_t tile, uint8_t attr)
 {

@@ -50,6 +50,7 @@
 
 #include "gfx_sdl.h"
 #include "png_write.h"
+#include "solver.h"
 #include "../core/audio.h"
 #include "../core/draw.h"
 #include "../core/font.h"
@@ -78,13 +79,6 @@ int plat_save_write(const void *buf, int size)
 
 const char *plat_name(void) { return "TOOL"; }
 
-/* ------------------------------------------------------------------ */
-/* Solver                                                              */
-/* ------------------------------------------------------------------ */
-
-#define MAX_TICKS 20000
-#define BEAM 20000
-#define HSIZE 65536 /* > 2 * BEAM, power of two */
 
 /*
  * Level sources: the built-in levels, plus one loaded from a text file (one
@@ -147,196 +141,10 @@ static int load_level_file(const char *path)
     return FILE_LEVEL;
 }
 
-static const Level *s_L;
-static int s_K, s_phase;
-static long s_nodes;
-static uint8_t s_sol[MAX_TICKS];
-static uint8_t s_best_sol[MAX_TICKS]; /* inputs of the furthest attempt */
-static float s_best_x;
-static int s_need_coins; /* require these coins (bitmask) to count as solved */
-static float s_coin_x[4];
-/* Rhythm mode: in the tap modes (cube, ball, UFO) the button may only go
- * down on 8th-note ticks of the level's song (s_grid). */
-static int s_rhythm;
-static uint8_t s_grid[MAX_TICKS];
-static float s_until_x; /* > 0: count reaching this x as solved (quick checks) */
-
-typedef struct {
-    Player p;
-    uint8_t prev;     /* button held on the previous tick */
-    uint16_t press_t; /* tick the current press started */
-} Node;
-
-/* In rhythm mode an orb only counts if the press began at most this many
- * ticks before it fired: a player taps on the orb rather than holding the
- * button through it. */
-#define ORB_TAP_TICKS 6
-
-static Node *s_cur, *s_next;
-static uint16_t *s_par[MAX_TICKS]; /* parent index in the previous frontier */
-static uint8_t *s_inp[MAX_TICKS];  /* input that led to this node */
-static uint64_t s_hash[HSIZE];
-static uint16_t s_tmp_par[BEAM];
-static uint8_t s_tmp_inp[BEAM];
-
-static uint64_t mix64(uint64_t h, uint64_t v)
-{
-    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    return h * 0xff51afd7ed558ccdULL;
-}
-
-/* States closer than this quantization are treated as identical. `input`
- * holds the button (bit 0) and, in rhythm mode, whether the press is still
- * fresh enough to take an orb (bit 1). */
-static uint64_t state_key(const Player *p, int input)
-{
-    uint64_t h = 1469598103934665603ULL;
-    h = mix64(h, (uint64_t)(int64_t)lroundf(p->y * 16.0f));
-    h = mix64(h, (uint64_t)(int64_t)lroundf(p->vy * 2.0f));
-    h = mix64(h, (uint64_t)(int64_t)lroundf(p->x * 16.0f));
-    h = mix64(h, (uint64_t)(p->mode | ((p->grav + 1) << 4) | (p->grounded << 6) | (p->buf << 7) |
-                            (p->speed_idx << 8) | (input << 11) | ((uint64_t)p->coins << 13)));
-    for (int i = 0; i < (s_L->ninteract + 31) / 32; i++) h = mix64(h, p->used[i]);
-    return h | 1u;
-}
-
-static int hash_insert(uint64_t k)
-{
-    uint32_t i = (uint32_t)(k >> 24) & (HSIZE - 1);
-    for (;;) {
-        if (s_hash[i] == k) return 0;
-        if (s_hash[i] == 0) {
-            s_hash[i] = k;
-            return 1;
-        }
-        i = (i + 1) & (HSIZE - 1);
-    }
-}
-
-static int coins_ok(const Player *p)
-{
-    if (!s_need_coins) return 1;
-    for (int i = 0; i < s_L->ncoins && i < 4; i++)
-        if (((s_need_coins >> i) & 1) && !((p->coins >> i) & 1) && (p->done || p->x > s_coin_x[i] + 1.6f))
-            return 0;
-    return 1;
-}
-
-/* Write the input sequence ending at frontier node idx of tick t into dst. */
-static void backtrack(int t, int idx, uint8_t *dst)
-{
-    for (int k = t; k > 0; k--) {
-        dst[k - 1] = s_inp[k][idx];
-        idx = s_par[k][idx];
-    }
-}
-
-/* May the button change from prev to held on tick t? */
-static int input_allowed(int t, const Player *p, int prev, int held)
-{
-    if (held == prev) return 1;
-    int coarse = ((t - s_phase) % s_K + s_K) % s_K == 0;
-    if (!s_rhythm || !held || p->mode == MODE_SHIP || p->mode == MODE_WAVE) return coarse;
-    return s_grid[t];
-}
-
-/* Marks the ticks of every 8th note of the level's song, shifted by offset. */
+/* The rhythm check's grid: every 8th note of the level's song, shifted by offset. */
 static void rhythm_grid(const Level *L, int offset)
 {
-    float step = 1800.0f / audio_song_bpm(level_song(L)); /* ticks per 8th */
-    memset(s_grid, 0, sizeof(s_grid));
-    for (int k = 0;; k++) {
-        int t = (int)lroundf((float)k * step) + offset;
-        if (t >= MAX_TICKS) break;
-        if (t >= 0) s_grid[t] = 1;
-    }
-}
-
-/*
- * Breadth-first beam search over inputs. Inputs may only change on ticks
- * where (tick - phase) % K == 0, which models a player reacting at 60/K Hz
- * (and in rhythm mode, presses in the tap modes only on the beat grid).
- * Returns ticks to finish, or -1.
- */
-static int solve(const Level *L, int K, int phase, float *reached)
-{
-    s_L = L;
-    s_K = K;
-    s_phase = phase;
-    for (int i = 0; i < L->nobjs; i++)
-        if (L->objs[i].type == OBJ_COIN) s_coin_x[(L->objs[i].flags >> 4) & 3] = L->objs[i].cx + 0.5f;
-    if (!s_cur) {
-        s_cur = (Node *)malloc(sizeof(Node) * BEAM);
-        s_next = (Node *)malloc(sizeof(Node) * BEAM);
-    }
-    for (int t = 0; t < MAX_TICKS; t++) {
-        free(s_par[t]);
-        free(s_inp[t]);
-        s_par[t] = NULL;
-        s_inp[t] = NULL;
-    }
-    s_nodes = 0;
-    s_best_x = 0.0f;
-    memset(s_sol, 0, sizeof(s_sol));
-    memset(s_best_sol, 0, sizeof(s_best_sol));
-
-    int ncur = 1;
-    sim_reset(&s_cur[0].p, L);
-    s_cur[0].prev = 0;
-    s_cur[0].press_t = 0;
-    int result = -1;
-    for (int t = 0; t < MAX_TICKS - 1 && ncur > 0; t++) {
-        int nnext = 0;
-        memset(s_hash, 0, sizeof(s_hash));
-        s_par[t + 1] = s_tmp_par;
-        s_inp[t + 1] = s_tmp_inp;
-        int best_i = 0;
-        for (int i = 0; i < ncur && result < 0; i++) {
-            for (int held = 0; held < 2; held++) {
-                if (!input_allowed(t, &s_cur[i].p, s_cur[i].prev, held)) continue;
-                Node n = s_cur[i];
-                if (held && !n.prev) n.press_t = (uint16_t)t;
-                sim_tick(&n.p, L, held, held && !n.prev);
-                n.prev = (uint8_t)held;
-                s_nodes++;
-                if (n.p.dead || !coins_ok(&n.p)) continue;
-                int fresh = s_rhythm && held && t - n.press_t <= ORB_TAP_TICKS;
-                if (s_rhythm && (n.p.events & EV_ORB) && t - n.press_t > ORB_TAP_TICKS) continue;
-                if (n.p.done || (s_until_x > 0.0f && n.p.x >= s_until_x)) {
-                    s_tmp_par[0] = (uint16_t)i;
-                    s_tmp_inp[0] = (uint8_t)held;
-                    result = t + 1;
-                    break;
-                }
-                if (nnext >= BEAM || !hash_insert(state_key(&n.p, held | fresh << 1))) continue;
-                s_tmp_par[nnext] = (uint16_t)i;
-                s_tmp_inp[nnext] = (uint8_t)held;
-                s_next[nnext++] = n;
-            }
-        }
-        /* keep exactly-sized copies of this tick's parent links */
-        int keep = result >= 0 ? 1 : nnext;
-        s_par[t + 1] = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)(keep > 0 ? keep : 1));
-        s_inp[t + 1] = (uint8_t *)malloc((size_t)(keep > 0 ? keep : 1));
-        memcpy(s_par[t + 1], s_tmp_par, sizeof(uint16_t) * (size_t)keep);
-        memcpy(s_inp[t + 1], s_tmp_inp, (size_t)keep);
-        if (result >= 0) {
-            backtrack(t + 1, 0, s_sol);
-            break;
-        }
-        for (int i = 0; i < nnext; i++)
-            if (s_next[i].p.x > s_next[best_i].p.x) best_i = i;
-        if (nnext > 0 && s_next[best_i].p.x > s_best_x) {
-            s_best_x = s_next[best_i].p.x;
-            backtrack(t + 1, best_i, s_best_sol);
-        }
-        Node *tmp = s_cur;
-        s_cur = s_next;
-        s_next = tmp;
-        ncur = nnext;
-    }
-    if (reached) *reached = s_best_x;
-    return result;
+    solve_rhythm_grid(audio_song_bpm(level_song(L)), offset);
 }
 
 static int solve_level(int idx, int maxK, int verbose)
@@ -353,13 +161,13 @@ static int solve_level(int idx, int maxK, int verbose)
             int t = solve(L, K, ph, &reached);
             if (t >= 0) {
                 okc++;
-                if (verbose && K == 1) printf("  K=1: solved in %d ticks (%.1f s), %ld states\n", t, t / 60.0f, s_nodes);
+                if (verbose && K == 1) printf("  K=1: solved in %d ticks (%.1f s), %ld states\n", t, t / 60.0f, g_solve_nodes);
                 /* a portal the solution never touched means the level can be skipped */
                 Player r;
                 sim_reset(&r, L);
                 int prev = 0;
                 while (!r.done && !r.dead && r.ticks < MAX_TICKS) {
-                    int h = s_sol[r.ticks];
+                    int h = g_sol[r.ticks];
                     sim_tick(&r, L, h, h && !prev);
                     prev = h;
                 }
@@ -375,7 +183,7 @@ static int solve_level(int idx, int maxK, int verbose)
                 }
             } else {
                 printf("  K=%d phase=%d: FAILED, furthest x=%.1f (%d%%) states=%ld\n", K, ph, reached,
-                       (int)(reached / L->end_x * 100), s_nodes);
+                       (int)(reached / L->end_x * 100), g_solve_nodes);
             }
         }
         printf("  K=%d: %d/%d phases solvable\n", K, okc, K);
@@ -385,7 +193,7 @@ static int solve_level(int idx, int maxK, int verbose)
     return all_ok;
 }
 
-/* Fill s_sol with a solution (K=1) for level idx. Returns ticks or -1. */
+/* Fill g_sol with a solution (K=1) for level idx. Returns ticks or -1. */
 static int get_solution(int idx)
 {
     Level *L = level_parse(level_src(idx));
@@ -484,7 +292,7 @@ static int cmd_shot(int idx, float sec, const char *out, int practice)
     int ticks = (int)(sec * TICK_HZ);
     for (int t = 0; t < ticks; t++) {
         int tick = g_game.play.p.ticks;
-        uint32_t held = (tick < MAX_TICKS && s_sol[tick]) ? BTN_CROSS : 0;
+        uint32_t held = (tick < MAX_TICKS && g_sol[tick]) ? BTN_CROSS : 0;
         tick_with_audio(held);
     }
     render_frame(out);
@@ -499,9 +307,9 @@ static int cmd_menu(const char *which, const char *out, float sec)
         game_init();
         enter_play(1, 0);
         g_game.play.attempt = 128;
-        g_game.save.best[1] = 47;
-        g_game.save.best_practice[1] = 82;
-        for (int t = 0; t < 60; t++) tick_with_audio(s_sol[g_game.play.p.ticks] ? BTN_CROSS : 0);
+        g_game.save.progress.best[1] = 47;
+        g_game.save.progress.best_practice[1] = 82;
+        for (int t = 0; t < 60; t++) tick_with_audio(g_sol[g_game.play.p.ticks] ? BTN_CROSS : 0);
         tick_with_audio(BTN_START);
         tick_with_audio(0);
         render_frame(out);
@@ -515,10 +323,10 @@ static int cmd_menu(const char *which, const char *out, float sec)
     g_game.screen = scr;
     g_game.fade = 0.0f;
     g_game.fading = 0;
-    g_game.save.best[0] = 100;
-    g_game.save.coins[0] = 5;
-    g_game.save.best[1] = 47;
-    g_game.save.best_practice[1] = 82;
+    g_game.save.progress.best[0] = 100;
+    g_game.save.progress.coins[0] = 5;
+    g_game.save.progress.best[1] = 47;
+    g_game.save.progress.best_practice[1] = 82;
     for (int t = 0; t < (sec > 0.0f ? (int)(sec * TICK_HZ) : 100); t++) tick_with_audio(0);
     if (scr == SCR_SELECT) {
         tick_with_audio(BTN_RIGHT);
@@ -589,7 +397,7 @@ static int cmd_overview(int idx, const char *out)
     if (sol_ticks <= 0) {
         /* show how far the solver got */
         solve(L, 1, 0, NULL);
-        memcpy(s_sol, s_best_sol, sizeof(s_sol));
+        memcpy(g_sol, g_best_sol, sizeof(g_sol));
     }
     {
         Player p;
@@ -597,22 +405,24 @@ static int cmd_overview(int idx, const char *out)
         int prev = 0;
         SDL_SetRenderDrawColor(r, 80, 255, 255, 255);
         while (!p.done && !p.dead && p.ticks < MAX_TICKS) {
-            int h = s_sol[p.ticks];
+            int h = g_sol[p.ticks];
             sim_tick(&p, L, h, h && !prev);
             prev = h;
-            int row = (int)(p.x / ROWW);
+            float px = sim_x(&p), py = sim_y(&p);
+            int row = (int)(px / ROWW);
             if (row >= rows) break;
             int oy = (row + 1) * ROWH * S - 2 * S;
-            int x = (int)((p.x - row * ROWW) * S), y = (int)(oy - p.y * S);
+            int x = (int)((px - row * ROWW) * S), y = (int)(oy - py * S);
             SDL_RenderDrawPoint(r, x, y);
             if (h) SDL_RenderDrawPoint(r, x, y + 1);
         }
         if (p.dead) {
-            int row = (int)(p.x / ROWW);
+            float px = sim_x(&p), py = sim_y(&p);
+            int row = (int)(px / ROWW);
             int oy = (row + 1) * ROWH * S - 2 * S;
-            int x = (int)((p.x - row * ROWW) * S), y = (int)(oy - p.y * S);
+            int x = (int)((px - row * ROWW) * S), y = (int)(oy - py * S);
             ov_rect(r, x - 4, y - 4, 9, 9, 255, 0, 255);
-            printf("solver dies at x=%.2f y=%.2f\n", p.x, p.y);
+            printf("solver dies at x=%.2f y=%.2f\n", (double)px, (double)py);
         }
     }
     save_image(surf, out);
@@ -692,6 +502,21 @@ static int cmd_check(void)
         if (st % 16) {
             printf("  common pattern %s: %d steps\n", pd->name, st);
             bad++;
+        }
+    }
+    /* the progress bar's steps (progress_steps) are where the percentage
+     * the rules count (progress_percent) goes up, for any level width */
+    for (unsigned w = 1; w < 4000; w += w < 120 ? 1 : 13) {
+        uint32_t steps[101];
+        progress_steps(steps, (uint16_t)w);
+        for (int k = 0; k <= 100; k++) {
+            int32_t x = (int32_t)steps[k];
+            if (progress_percent(x, (uint16_t)w) != k || (k && progress_percent(x - 1, (uint16_t)w) != k - 1)) {
+                printf("progress: %d%% of %u columns starts at x=%d, which counts as %d%%\n", k, w, (int)x,
+                       progress_percent(x, (uint16_t)w));
+                bad++;
+                break;
+            }
         }
     }
     for (int i = 0; i < g_level_count; i++) {
@@ -783,14 +608,14 @@ static int cmd_smoke(void)
     guard = 0;
     while (g_game.play.phase != PH_COMPLETE && guard++ < 20000) {
         int tick = g_game.play.p.ticks;
-        tick_with_audio(s_sol[tick] ? BTN_CROSS : 0);
+        tick_with_audio(g_sol[tick] ? BTN_CROSS : 0);
     }
     if (g_game.play.phase != PH_COMPLETE) { printf("smoke: level not completed\n"); fails++; }
     for (int t = 0; t < 150; t++) tick_with_audio(0);
     tick_with_audio(BTN_CROSS);
     for (int t = 0; t < 40; t++) tick_with_audio(0);
     if (g_game.screen != SCR_SELECT) { printf("smoke: expected select after results\n"); fails++; }
-    if (g_game.save.best[0] != 100) { printf("smoke: best not recorded\n"); fails++; }
+    if (g_game.save.progress.best[0] != 100) { printf("smoke: best not recorded\n"); fails++; }
     /* practice mode with a checkpoint and pause menu */
     tick_with_audio(BTN_SQUARE);
     for (int t = 0; t < 60; t++) tick_with_audio(0);
@@ -806,7 +631,7 @@ static int cmd_smoke(void)
     tick_with_audio(BTN_CROSS);
     for (int t = 0; t < 40; t++) tick_with_audio(0);
     if (g_game.screen != SCR_SELECT) { printf("smoke: exit from pause failed\n"); fails++; }
-    printf("smoke: %s (attempts on level 0: %u)\n", fails ? "FAILED" : "ok", (unsigned)g_game.save.attempts[0]);
+    printf("smoke: %s (attempts on level 0: %u)\n", fails ? "FAILED" : "ok", (unsigned)g_game.save.progress.attempts[0]);
     return fails;
 }
 
@@ -815,17 +640,17 @@ static int coins_level(int idx, int want)
 {
     Level *L = level_parse(level_src(idx));
     float reached;
-    s_need_coins = want >= 0 ? want : (1 << L->ncoins) - 1;
+    g_solve_coins = want >= 0 ? want : (1 << L->ncoins) - 1;
     int t = solve(L, 1, 0, &reached);
     printf("level %d: all %d coins %s\n", idx, L->ncoins, t >= 0 ? "collectable" : "NOT collectable in one run");
     if (t < 0) {
         for (int c = 0; c < L->ncoins; c++) {
-            s_need_coins = 1 << c;
+            g_solve_coins = 1 << c;
             int tc = solve(L, 1, 0, &reached);
-            printf("  coin %d at x=%.0f: %s\n", c, (double)s_coin_x[c], tc >= 0 ? "ok alone" : "UNREACHABLE");
+            printf("  coin %d at x=%.0f: %s\n", c, (double)g_coin_x[c], tc >= 0 ? "ok alone" : "UNREACHABLE");
         }
     }
-    s_need_coins = 0;
+    g_solve_coins = 0;
     level_free(L);
     return t >= 0;
 }
@@ -842,9 +667,9 @@ static int rhythm_level(int idx, int tol)
     for (int o = -tol; o <= tol; o += tol > 0 ? tol : 1) {
         float reached;
         rhythm_grid(L, o);
-        s_rhythm = 1;
+        g_solve_rhythm = 1;
         int t = solve(L, 3, 0, &reached);
-        s_rhythm = 0;
+        g_solve_rhythm = 0;
         if (t >= 0) printf(", %+d ticks ok", o);
         else {
             printf(", %+d ticks FAILED at x=%.1f", o, (double)reached);
@@ -862,7 +687,7 @@ static int replay_ok(const Level *L, const uint8_t *in, int n, float x_end)
     Player p;
     sim_reset(&p, L);
     int prev = 0;
-    while (!p.dead && !p.done && p.x < x_end && p.ticks < MAX_TICKS) {
+    while (!p.dead && !p.done && sim_x(&p) < x_end && p.ticks < MAX_TICKS) {
         int h = p.ticks < n ? in[p.ticks] : 0;
         sim_tick(&p, L, h, h && !prev);
         prev = h;
@@ -880,16 +705,16 @@ static int cmd_orbs(int idx, int min_window)
 {
     Level *L = level_parse(level_src(idx));
     rhythm_grid(L, 0);
-    s_rhythm = 1;
+    g_solve_rhythm = 1;
     int t_end = solve(L, 3, 0, NULL);
-    s_rhythm = 0;
+    g_solve_rhythm = 0;
     if (t_end < 0) {
         printf("level %d: no on-beat run\n", idx);
         level_free(L);
         return 1;
     }
     static uint8_t base[MAX_TICKS], trial[MAX_TICKS];
-    memcpy(base, s_sol, sizeof(base));
+    memcpy(base, g_sol, sizeof(base));
     float step = 1800.0f / audio_song_bpm(level_song(L));
     Player p;
     sim_reset(&p, L);
@@ -947,12 +772,12 @@ static int cmd_ruler(int idx)
     int prev = 0, k = 0;
     while (!p.done && !p.dead && p.ticks < MAX_TICKS) {
         while (lroundf((float)k * step) <= p.ticks) {
-            int c = (int)p.x;
+            int c = (int)(p.x >> 16);
             if (c >= 0 && c < 4096 && !mark[c]) mark[c] = (int8_t)(k % 8 == 0 ? 'B' : (k % 2 == 0 ? '+' : '.'));
             if (k % 8 == 0 && c >= 0 && c < 4096) mark[c] = (int8_t)('0' + (k / 8) % 10);
             k++;
         }
-        int h = s_sol[p.ticks];
+        int h = g_sol[p.ticks];
         sim_tick(&p, L, h, h && !prev);
         prev = h;
     }
@@ -981,9 +806,9 @@ static int cmd_script(int idx, int offset)
 {
     Level *L = level_parse(level_src(idx));
     rhythm_grid(L, offset);
-    s_rhythm = 1;
+    g_solve_rhythm = 1;
     int t = solve(L, 3, 0, NULL);
-    s_rhythm = 0;
+    g_solve_rhythm = 0;
     level_free(L);
     if (t < 0) {
         fprintf(stderr, "no on-beat solution\n");
@@ -992,14 +817,14 @@ static int cmd_script(int idx, int offset)
     const float frames_per_tick = 60000.0f / 1001.0f / 60.0f;
     const char *sep = "";
     for (int k = 0; k < t;) {
-        if (!s_sol[k]) {
+        if (!g_sol[k]) {
             k++;
             continue;
         }
         int start = k;
-        while (k < t && s_sol[k]) k++;
+        while (k < t && g_sol[k]) k++;
         int next = k;
-        while (next < t && !s_sol[next]) next++;
+        while (next < t && !g_sol[next]) next++;
         int f0 = (int)lroundf((float)start * frames_per_tick), f1 = (int)lroundf((float)k * frames_per_tick);
         int fn = next < t ? (int)lroundf((float)next * frames_per_tick) : f0 + 100;
         /* hold at least 4 frames so the pad poll sees it, but release before the next press */
@@ -1110,19 +935,20 @@ static int demo_run_ok(const Level *L, const DemoXPress *pr, int n, float shift,
 {
     Player p;
     sim_reset(&p, L);
-    p.x = -shift;
-    float last = p.x;
+    p.x = (int32_t)lroundf(-shift * SIM_ONE);
+    float last = sim_x(&p);
     int held = 0;
-    while (!p.dead && p.x < x_end) {
+    while (!p.dead && sim_x(&p) < x_end) {
+        float x = sim_x(&p);
         int h = 0;
         for (int i = 0; i < n; i++)
-            if ((p.x >= pr[i].x0 && p.x < pr[i].x1) || (last < pr[i].x0 && p.x >= pr[i].x1)) h = 1;
-        last = p.x;
+            if ((x >= pr[i].x0 && x < pr[i].x1) || (last < pr[i].x0 && x >= pr[i].x1)) h = 1;
+        last = x;
         sim_tick(&p, L, h, h && !held);
         held = h;
     }
     if (x_end < DEMO_WRAP) return !p.dead;
-    return !p.dead && p.grounded && !held && fabsf(p.y - 0.5f) < 0.01f;
+    return !p.dead && p.grounded && !held && p.y == SIM_ONE / 2;
 }
 
 /* ... from ten sub-tick phases. */
@@ -1149,9 +975,9 @@ static int cmd_demo(int gen)
     if (gen) {
         Level *L = level_parse(demo_level_src());
         rhythm_grid(L, 0);
-        s_rhythm = 1;
+        g_solve_rhythm = 1;
         int t_end = solve(L, 3, 0, NULL);
-        s_rhythm = 0;
+        g_solve_rhythm = 0;
         if (t_end < 0) {
             printf("demo: no on-beat run\n");
             level_free(L);
@@ -1164,21 +990,21 @@ static int cmd_demo(int gen)
         sim_reset(&p, L);
         int prev = 0;
         for (int t = 0; t < t_end; t++) {
-            xs[t] = p.x;
-            sim_tick(&p, L, s_sol[t], s_sol[t] && !prev);
-            prev = s_sol[t];
+            xs[t] = sim_x(&p);
+            sim_tick(&p, L, g_sol[t], g_sol[t] && !prev);
+            prev = g_sol[t];
         }
-        xs[t_end] = p.x;
+        xs[t_end] = sim_x(&p);
         const float tick = speed * TICK_DT;
         static DemoXPress pr[256];
         int n = 0;
         for (int t = 0; t < t_end && n < 256;) {
-            if (!s_sol[t]) {
+            if (!g_sol[t]) {
                 t++;
                 continue;
             }
             int t0 = t;
-            while (t < t_end && s_sol[t]) t++;
+            while (t < t_end && g_sol[t]) t++;
             if (xs[t0] >= DEMO_WRAP) break;
             pr[n].x0 = xs[t0] - tick * 0.5f;
             pr[n].x1 = xs[t] - tick * 0.5f;
@@ -1237,12 +1063,12 @@ static int cmd_demo(int gen)
     /* free running */
     int deaths = 0, wraps = 0;
     for (int t = 0; t < 5 * loop_ticks; t++) {
-        float x0 = ps->p.x;
+        float x0 = sim_x(&ps->p);
         if (demo_tick(ps, NULL)) {
             printf("demo: free run died at x=%.2f (loop %d)\n", (double)x0, wraps + 1);
             deaths++;
         }
-        wraps += ps->p.x < x0 - DEMO_LOOP * 0.5f;
+        wraps += sim_x(&ps->p) < x0 - DEMO_LOOP * 0.5f;
     }
     printf("demo: free run: %d loops, %d deaths\n", wraps, deaths);
     bad += deaths > 0 || wraps < 4;
@@ -1258,23 +1084,23 @@ static int cmd_demo(int gen)
         for (int t = 0; t < loop_ticks * 13 / 10; t++) {
             clock += TICK_DT * 1.001;
             float beat = (float)(floor(clock * AUDIO_RATE / 1024.0) * 1024.0 / AUDIO_RATE * bpm / 60.0);
-            float x0 = ps->p.x;
+            float x0 = sim_x(&ps->p);
             if (demo_tick(ps, &beat)) {
                 if (deaths < 8) printf("demo: from beat %.2f died at x=%.2f\n", (double)b0, (double)x0);
                 deaths++;
             }
-            float dx = ps->p.x - x0;
+            float dx = sim_x(&ps->p) - x0;
             if (t > 0 && fabsf(dx) > 1.0f && fabsf(dx + DEMO_LOOP) > 1.0f) seeks++;
             if (t < 120) continue;
             /* against the music as heard (not the chunked clock) */
-            float d = (float)fmod(clock * speed, (double)DEMO_LOOP) - ps->p.x;
+            float d = (float)fmod(clock * speed, (double)DEMO_LOOP) - sim_x(&ps->p);
             d -= DEMO_LOOP * floorf(d / DEMO_LOOP + 0.5f);
             max_err = maxf(max_err, fabsf(d));
             if (ps->p.events & (EV_JUMP | EV_ORB)) {
                 double e8 = clock * bpm / 30.0; /* 8th notes */
                 float off = (float)fabs(e8 - floor(e8 + 0.5)) * 30000.0f / bpm; /* ms */
                 max_off = maxf(max_off, off);
-                if (b0 == 0.0f && off > 50.0f) printf("demo: jump at x=%.1f is %.0f ms off the beat\n", (double)ps->p.x, (double)off);
+                if (b0 == 0.0f && off > 50.0f) printf("demo: jump at x=%.1f is %.0f ms off the beat\n", (double)sim_x(&ps->p), (double)off);
                 sum_off += off;
                 jumps++;
             }
@@ -1371,7 +1197,7 @@ static int cmd_prof(int idx)
     GfxStats worst_s = {0, 0, 0, 0};
     while (g_game.play.phase == PH_RUN && frames < 20000) {
         int tick = g_game.play.p.ticks;
-        tick_with_audio((tick < MAX_TICKS && s_sol[tick]) ? BTN_CROSS : 0);
+        tick_with_audio((tick < MAX_TICKS && g_sol[tick]) ? BTN_CROSS : 0);
         gfx_sdl_begin(NULL, 1.0f, 1.0f);
         game_render(1.0f);
         gfx_sdl_flush();
@@ -1380,7 +1206,7 @@ static int cmd_prof(int idx)
         sum += n;
         if (n > worst) {
             worst = n;
-            worst_x = g_game.play.p.x;
+            worst_x = sim_x(&g_game.play.p);
             worst_s = *st;
         }
         frames++;
@@ -1466,7 +1292,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "script") && argc >= 3) return cmd_script(level_arg(argv[2]), argc > 3 ? atoi(argv[3]) : 0);
     if (!strcmp(cmd, "rhythm") && argc >= 3) {
         int tol = argc > 3 ? atoi(argv[3]) : 2, fails = 0;
-        s_until_x = argc > 4 ? (float)atof(argv[4]) : 0.0f;
+        g_solve_until_x = argc > 4 ? (float)atof(argv[4]) : 0.0f;
         if (strcmp(argv[2], "all")) fails += !rhythm_level(level_arg(argv[2]), tol);
         else
             for (int i = 0; i < g_level_count; i++) fails += !rhythm_level(i, tol);
@@ -1481,15 +1307,15 @@ int main(int argc, char **argv)
             /* trace the rhythm check's run at this offset (furthest attempt if it fails) */
             Level *Lr = level_parse(level_src(idx));
             rhythm_grid(Lr, atoi(argv[5]));
-            s_rhythm = 1;
-            if (solve(Lr, 3, 0, NULL) < 0) memcpy(s_sol, s_best_sol, sizeof(s_sol));
-            s_rhythm = 0;
+            g_solve_rhythm = 1;
+            if (solve(Lr, 3, 0, NULL) < 0) memcpy(g_sol, g_best_sol, sizeof(g_sol));
+            g_solve_rhythm = 0;
             level_free(Lr);
         } else if (get_solution(idx) < 0) {
             printf("no solution; tracing furthest attempt\n");
             Level *Lb = level_parse(level_src(idx));
             solve(Lb, 1, 0, NULL);
-            memcpy(s_sol, s_best_sol, sizeof(s_sol));
+            memcpy(g_sol, g_best_sol, sizeof(g_sol));
             level_free(Lb);
         }
         Level *L = level_parse(level_src(idx));
@@ -1497,12 +1323,13 @@ int main(int argc, char **argv)
         sim_reset(&p, L);
         int prev = 0;
         while (!p.done && !p.dead && p.ticks < MAX_TICKS) {
-            int h = s_sol[p.ticks];
+            int h = g_sol[p.ticks];
             sim_tick(&p, L, h, h && !prev);
             prev = h;
-            if (p.x >= x0 && p.x <= x1)
-                printf("t=%4d x=%6.2f y=%6.2f vy=%6.2f mode=%d grav=%d grounded=%d held=%d floor=%.1f ceil=%.1f ev=%x\n",
-                       p.ticks, p.x, p.y, p.vy, p.mode, p.grav, p.grounded, h, p.floor_y, p.ceil_y, p.events);
+            if (sim_x(&p) >= x0 && sim_x(&p) <= x1)
+                printf("t=%4d x=%6.2f y=%6.2f vy=%6.2f mode=%d grav=%d grounded=%d held=%d floor=%d ceil=%d ev=%x\n",
+                       p.ticks, (double)sim_x(&p), (double)sim_y(&p), (double)sim_vy(&p), p.mode, p.grav, p.grounded, h,
+                       p.floor_y, p.ceil_y, p.events);
         }
         level_free(L);
         return 0;

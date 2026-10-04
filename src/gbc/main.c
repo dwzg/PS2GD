@@ -69,7 +69,10 @@ void main(void)
     save_load();
     video_init();
     for (;;) {
-        title_screen();
+        if (play_title()) {
+            garage_screen();
+            continue;
+        }
         while (select_screen(&level, &practice)) play_level(level, practice);
     }
 }

@@ -1,6 +1,11 @@
 #include "save.h"
 #include "platform.h"
 
+/* The layout of a 1.x save, which memory cards hold: the progress from
+ * byte 8, the garage from byte 128 (a compile error if it moves). */
+typedef char save_layout_check[(offsetof(SaveData, progress) == 8 && offsetof(SaveData, icon) == 128 &&
+                                sizeof(SaveData) == 140) ? 1 : -1];
+
 static uint32_t checksum(const SaveData *s)
 {
     const uint8_t *p = (const uint8_t *)s;

@@ -31,8 +31,12 @@
  * object palettes, which is white): "ATTEMPT 5" */
 #define UT_SKYFONT 96
 #define SKYFONT_CHARS " 0123456789ATEMPNWBS%!"
+/* The garage's choices sit half a tile below the background grid, each
+ * drawn as a top tile (its upper half, in the tile's lower 4 rows) and the
+ * tile under it (its lower half): */
+#define UT_SOLID 118         /* colour swatches, solid colour 1, 2, 3: 3 pairs */
 
-#define ST_CUBE 128          /* 6 frames, 0..75 degrees */
+#define ST_CUBE 128          /* 6 frames, 0..75 degrees, of the player's icon (gfx_icons) */
 #define ST_SHIP 152          /* 7 frames, nose 30 degrees up .. 30 down */
 #define ST_BALL 180          /* 4 frames, 0..67.5 degrees */
 #define ST_UFO 196           /* 3 frames, tilted left, level, right */
@@ -42,6 +46,8 @@
 #define ST_DOT 224           /* wave trail dot */
 #define ST_CHECK 226         /* practice checkpoint */
 #define ST_RING 228          /* 16x16 ring (orb/pad touch), 2 frames */
+#define UT_ICON 236          /* the icons, unrotated: ICON_COUNT pairs */
+#define ST_BOX 252           /* 8x16 sprite: a box around a tile (garage cursor) */
 
 #define CUBE_FRAMES 6
 #define SHIP_FRAMES 7

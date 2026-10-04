@@ -1,14 +1,13 @@
 /*
- * Fixed-point player simulation for the Game Boy Color build.
+ * The player's physics on the Game Boy Color: the rules of
+ * src/core/sim_rules.h, as src/core/sim.c implements them for every other
+ * platform, rewritten for an 8-bit CPU without a multiply instruction (see
+ * gbsim.c). It must give exactly the same results as src/core/sim.c, tick
+ * by tick: `gbc_tool difftest` checks that on every level the Game Boy
+ * plays, and the emulator test plays the ROM against it.
  *
- * The same rules as src/core/sim.c (same constants, hitboxes, sub-steps and
- * order of checks), in integers: the Game Boy has no floating point, and its
- * CPU has no multiply instruction. This file is plain C that builds with
- * SDCC for the ROM and with the host compiler for gbc_tool, whose solver
- * proves every level can be finished with exactly this code.
- *
- * Units: positions are 16.16 fixed point in blocks; velocities are in
- * 1/65536 block per sub-step (1/240 s), so integrating is one addition.
+ * Plain C that builds with SDCC for the ROM and with the host compiler for
+ * gbc_tool. Units as in sim_rules.h.
  */
 #ifndef GBSIM_H
 #define GBSIM_H
@@ -25,38 +24,22 @@
 #define GS_BANKED
 #endif
 
-#define GS_SUBSTEPS 4
-#define GS_ONE 65536L /* one block */
 /* Levels are stored as columns of GS_ROWS cells (rows above the art are
- * empty, see tileset.h for what a cell holds). */
+ * empty, see tileset.h for what a cell holds): a level higher than that
+ * isn't on the Game Boy. */
 #define GS_ROWS 16
-#define GS_CORRIDOR 10 /* ship/ball/UFO/wave corridor height in rows */
-
-enum { GM_CUBE = 0, GM_SHIP, GM_BALL, GM_UFO, GM_WAVE };
-
-/* Events raised during a tick (same bits as src/core/sim.h). */
-#define GE_JUMP 0x0001u
-#define GE_LAND 0x0002u
-#define GE_ORB 0x0004u
-#define GE_PAD 0x0008u
-#define GE_PORTAL 0x0010u
-#define GE_GRAVITY 0x0020u
-#define GE_COIN 0x0040u
-#define GE_DEATH 0x0080u
-#define GE_COMPLETE 0x0100u
-#define GE_SPEED 0x0200u
 
 /* Objects used this attempt (orbs, pads, portals, coins): only the ones
  * near the player can be touched again, so a short ring of cell keys is
- * enough (gbc_tool checks that no level needs more). */
+ * enough (gbc_tool checks that no level on the Game Boy needs more). */
 #define GS_USED_N 8
 
 typedef struct {
     uint32_t x;     /* 16.16 blocks */
-    uint16_t xfrac; /* and 1/65536 of its last unit (see advance_x) */
+    uint16_t xfrac; /* and 1/65536 of its last unit */
     int32_t y;      /* 16.16 blocks */
     int16_t vy;     /* 1/65536 block per sub-step */
-    uint16_t speed; /* 1/65536 block per sub-step */
+    uint16_t speed; /* SIM_SPEED_HI[speed_idx] */
     int8_t floor_y, ceil_y; /* corridor rows for non-cube modes */
     int8_t grav;            /* +1 normal, -1 upside down */
     uint8_t mode;
@@ -106,7 +89,5 @@ void gs_tick(uint8_t held, uint8_t pressed) GS_BANKED;
 /* Hitbox half extents (16.16) of the current mode. */
 void gs_hitbox(uint16_t *hw, uint16_t *hh) GS_BANKED;
 
-/* Per-sub-step horizontal speeds of the four speed portals. */
-extern const uint16_t GS_SPEEDS[4];
 
 #endif

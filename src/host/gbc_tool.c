@@ -1,19 +1,20 @@
 /*
  * gbc_tool - builds the Game Boy Color version's data from the game's own
- * sources, and checks the levels against its fixed-point physics.
+ * sources, and checks its physics against the reference.
  *
  *   gbc_tool export <dir> [version]   write the generated sources the ROM is
  *                                     built from: the levels as tile grids,
  *                                     tiles and sprites, palettes, and the
  *                                     songs arranged for the four channels
- *   gbc_tool solve <lvl|all> [K]      prove levels can be finished with the
- *                                     GBC's physics (src/gbc/gbsim.c), inputs
- *                                     changing at most every K ticks, every
- *                                     phase (as pd_tool solve)
- *   gbc_tool rhythm <lvl|all> [tol]   ... pressing in cube, ball and UFO only
- *                                     on 8th notes of the song (as pd_tool rhythm)
- *   gbc_tool trace <lvl> x0 x1 [off]  player state along the solver's path (with
- *                                     off: the rhythm check's run at that offset)
+ *   gbc_tool levels                   the levels on the Game Boy, those that fit
+ *                                     it: "<its number> <the game's number>"
+ *                                     per line, and why the others don't fit
+ *   gbc_tool difftest [lvl|all] [n]   play each level with the Game Boy's
+ *                                     physics (src/gbc/gbsim.c) and the
+ *                                     reference (src/core/sim.c) side by side,
+ *                                     along the solver's run and n runs that
+ *                                     leave it (default 2000): fails unless
+ *                                     every tick of every run is the same
  *   gbc_tool script <lvl> <out>       the solver's inputs, for the emulator test:
  *                                     one line per press, "<tick> <ticks held>"
  *   gbc_tool replay <lvl> <script>    play a script, print the player every tick
@@ -22,14 +23,17 @@
  *                                     drawn from the tiles (scaled 3x)
  *   gbc_tool music                    channel usage and size of every song
  */
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "png_write.h"
+#include "solver.h"
 #include "../core/audio.h"
 #include "../core/font.h"
+#include "../core/game_internal.h" /* the title demo */
 #include "../core/level.h"
 #include "../core/platform.h"
 #include "../core/songdata.h"
@@ -58,7 +62,8 @@ const char *plat_name(void) { return "TOOL"; }
 #define BANK_GFX 1
 #define BANK_LEVEL0 2
 #define BANK_SONG0 (BANK_LEVEL0 + 6)
-#define BANK_SONG_LAST 13 /* the simulation's code is in bank 14, the menus' in 15 */
+#define BANK_SONG_LAST 12
+#define BANK_DEMO 13      /* the title's demo level; the simulation's code is in bank 14, the menus' in 15 */
 #define BANK_UI 15        /* with the menus, palette.c */
 #define ROM_BANKS 16
 #define BANK_SIZE 16384
@@ -98,9 +103,15 @@ static int obj_tile(const LevelObj *o)
     return -1; /* big saws: a 3x3-tile object, not supported */
 }
 
-static int build_level(int idx, GLevel *g)
+/* Why the last level build_level refused doesn't fit the Game Boy. */
+static char s_unfit[160];
+
+/* The level (src, numbered idx in messages) as the Game Boy stores it, or
+ * -1 (and s_unfit) if it doesn't fit the Game Boy: the Game Boy plays the
+ * levels that do. */
+static int build_level_src(const char *const *src, int idx, GLevel *g)
 {
-    Level *L = level_parse(g_levels[idx].src);
+    Level *L = level_parse(src);
     if (!L) die("out of memory");
     memset(g, 0, sizeof(*g));
     memcpy(g->name, L->name, sizeof(g->name));
@@ -113,8 +124,14 @@ static int build_level(int idx, GLevel *g)
     g->height = L->height;
     g->ncoins = L->ncoins;
     if (L->height > GS_ROWS) {
-        fprintf(stderr, "level %d: %d rows, the GBC build stores %d\n", idx, L->height, GS_ROWS);
-        exit(1);
+        snprintf(s_unfit, sizeof(s_unfit), "%d rows high, the Game Boy stores %d", L->height, GS_ROWS);
+        level_free(L);
+        return -1;
+    }
+    if ((size_t)L->width * GS_ROWS > BANK_SIZE) {
+        snprintf(s_unfit, sizeof(s_unfit), "%d columns, a ROM bank holds %d", L->width, BANK_SIZE / GS_ROWS);
+        level_free(L);
+        return -1;
     }
     g->cells = (uint8_t *)calloc((size_t)L->width * GS_ROWS, 1);
     for (int y = 0; y < L->height; y++) {
@@ -129,9 +146,11 @@ static int build_level(int idx, GLevel *g)
         const LevelObj *o = &L->objs[i];
         int t = obj_tile(o);
         if (t < 0) {
-            fprintf(stderr, "level %d: object type %d at %d,%d is not supported on the GBC\n", idx, o->type, o->cx,
-                    o->cy);
-            exit(1);
+            snprintf(s_unfit, sizeof(s_unfit), "object type %d at %d,%d (a big saw) isn't on the Game Boy", o->type,
+                     o->cx, o->cy);
+            free(g->cells);
+            level_free(L);
+            return -1;
         }
         if (CELL(g, o->cx, o->cy)) die("two objects in one cell");
         CELL(g, o->cx, o->cy) = (uint8_t)t;
@@ -152,15 +171,15 @@ static int build_level(int idx, GLevel *g)
      * (portals are passed in column order, every one of them), the ceiling
      * and the ground above it, and a raised floor's surface */
     {
-        int on = 0, fl = 0, cl = GS_CORRIDOR;
+        int on = 0, fl = 0, cl = SIM_CORRIDOR;
         for (int x = 0; x < L->width; x++) {
             for (int i = L->col_start[x]; i < L->col_start[x + 1]; i++) {
                 const LevelObj *o = &L->objs[i];
                 if (o->type == OBJ_PORTAL_CUBE) on = 0;
                 if (o->type >= OBJ_PORTAL_SHIP && o->type <= OBJ_PORTAL_WAVE) {
                     on = 1;
-                    fl = maxi(0, o->cy - GS_CORRIDOR / 2 + 1); /* as gbsim's enter_mode */
-                    cl = fl + GS_CORRIDOR;
+                    fl = maxi(0, o->cy - SIM_CORRIDOR / 2 + 1); /* as gbsim's enter_mode */
+                    cl = fl + SIM_CORRIDOR;
                 }
             }
             if (!on) continue;
@@ -190,9 +209,11 @@ static int build_level(int idx, GLevel *g)
         for (int i = L->col_start[x]; i < L->col_start[x + 4]; i++)
             if (L->objs[i].type >= OBJ_ORB_YELLOW) n++;
         if (n > GS_USED_N) {
-            fprintf(stderr, "level %d: %d orbs/pads/portals/coins within columns %d..%d (max %d)\n", idx, n, x,
-                    x + 3, GS_USED_N);
-            exit(1);
+            snprintf(s_unfit, sizeof(s_unfit), "%d orbs/pads/portals/coins within columns %d..%d, the Game Boy's "
+                     "physics remembers %d", n, x, x + 3, GS_USED_N);
+            free(g->cells);
+            level_free(L);
+            return -1;
         }
     }
     g->ntrig = L->ntrig;
@@ -202,6 +223,34 @@ static int build_level(int idx, GLevel *g)
     }
     level_free(L);
     return 0;
+}
+
+static int build_level(int idx, GLevel *g) { return build_level_src(g_levels[idx].src, idx, g); }
+
+/* The levels on the Game Boy: those that fit, in the game's order, at most
+ * one per level bank. */
+#define GB_MAX_LEVELS (BANK_SONG0 - BANK_LEVEL0)
+static int s_gb_level[GB_MAX_LEVELS], s_gb_count = -1;
+
+static void gb_levels(int verbose)
+{
+    if (s_gb_count >= 0) return;
+    s_gb_count = 0;
+    for (int i = 0; i < g_level_count; i++) {
+        GLevel g;
+        if (build_level(i, &g) < 0) {
+            LevelInfo info;
+            level_info(i, &info);
+            if (verbose) fprintf(stderr, "gbc_tool: level %d (%s) is left out: %s\n", i, info.name, s_unfit);
+            continue;
+        }
+        free(g.cells);
+        if (s_gb_count == GB_MAX_LEVELS) {
+            if (verbose) fprintf(stderr, "gbc_tool: level %d is left out: the ROM has banks for %d\n", i, GB_MAX_LEVELS);
+            continue;
+        }
+        s_gb_level[s_gb_count++] = i;
+    }
 }
 
 static void use_level(const GLevel *g)
@@ -252,6 +301,17 @@ static void art(Tile *t, const char *const rows[8], const char *keys)
             const char *k = strchr(keys, rows[y][x]);
             t->p[y][x] = (uint8_t)(k && rows[y][x] ? k - keys : 0);
         }
+}
+
+/* t as two tiles half a tile lower: its upper half in the lower 4 rows of
+ * out[0], its lower half in the upper 4 rows of out[1] */
+static void half_down(const Tile *t, Tile out[2])
+{
+    memset(out, 0, 2 * sizeof(Tile));
+    for (int y = 0; y < 4; y++) {
+        memcpy(out[0].p[y + 4], t->p[y], 8);
+        memcpy(out[1].p[y], t->p[y + 4], 8);
+    }
 }
 
 static void flip_v(Tile *t)
@@ -471,6 +531,24 @@ static void make_level_tiles(void)
             if (b->p[y][0] != 2) b->p[y][0] = 3;
         s_bg_pal[T_GROUND_TOP + 2 * i] = s_bg_pal[T_GROUND_TOP + 2 * i + 1] = PAL_GROUND;
     }
+
+    /* the finish line (render.c's end gate): a white line at the level's
+     * end, 2 pixels, in a white glow rising from 3 blocks before it to 55%
+     * and fading over 2 blocks after, dithered over the sky (palette YP:
+     * sky, -, -, white) */
+    {
+        static const uint8_t BAYER[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+        for (int k = 0; k < T_FINISH_COLS; k++) {
+            Tile *t = &s_bg[T_FINISH + k];
+            for (int x = 0; x < 8; x++) {
+                int px = (k - 3) * 8 + x; /* pixels from the line */
+                double a = px < 0 ? 0.55 * (px + 24) / 24.0 : 0.55 * (1.0 - px / 16.0);
+                for (int y = 0; y < 8; y++)
+                    t->p[y][x] = px == -1 || px == 0 || a * 16 > BAYER[y & 3][x & 3] + 0.5 ? 3 : 0;
+            }
+            s_bg_pal[T_FINISH + k] = PAL_YP;
+        }
+    }
     s_bg_count = T_LEVEL_COUNT;
 }
 
@@ -514,6 +592,16 @@ static void make_ui_tiles(void)
     static const char *const DIAMOND[8] = {"...X....", "..XXX...", ".XXXXX..", "XXXXXXX.",
                                            ".XXXXX..", "..XXX...", "...X....", "........"};
     art(&s_ui[UT_DIAMOND], DIAMOND, ".?X");
+    for (int c = 1; c <= 3; c++) {
+        Tile t;
+        memset(&t, c, sizeof(t));
+        half_down(&t, &s_ui[UT_SOLID + 2 * (c - 1)]);
+    }
+    /* the garage's cursor, a white box one pixel around a tile (sprite
+     * colour 2 is white in the effects' palette) */
+    for (int k = 0; k < 8; k++) {
+        s_ui[ST_BOX].p[0][k] = s_ui[ST_BOX].p[7][k] = s_ui[ST_BOX].p[k][0] = s_ui[ST_BOX].p[k][7] = 2;
+    }
 }
 
 /* "PULSE" over "DASH", in the font at 3x with an outline, top white,
@@ -620,10 +708,24 @@ static void rotated_frames(const char *const *rows, int w, int h, int base, int 
     }
 }
 
+/* The garage's eight cube icons (src/core/icons.c, the same names and
+ * order), at the Game Boy's size: P primary colour, S secondary, K outline. */
+static const char *const ICON_ART[ICON_COUNT][8] = {
+    {"KKKKKKKK", "KPPPPPPK", "KPKKKKPK", "KPKSSKPK", "KPKSSKPK", "KPKKKKPK", "KPPPPPPK", "KKKKKKKK"}, /* CORE */
+    {"KKKKKKKK", "KPPPPPPK", "KKKKKKKK", "KKSSSSKK", "KKKKKKKK", "KPPPPPPK", "KPKKKKPK", "KKKKKKKK"}, /* VISOR */
+    {"KKKKKKKK", "KPPPPPPK", "KPSPPSPK", "KPSPPSPK", "KPPPPPPK", "KPKKKKPK", "KPPPPPPK", "KKKKKKKK"}, /* BUDDY */
+    {"KKKKKKKK", "KPPPPPKK", "KPPPPKSK", "KPPPKSSK", "KPPKSSSK", "KPKSSKKK", "KKSSSKKK", "KKKKKKKK"}, /* SPLIT */
+    {"KKKKKKKK", "KPPPPPPK", "KPSSSSPK", "KPSKKSPK", "KPSKKSPK", "KPSSSSPK", "KPPPPPPK", "KKKKKKKK"}, /* TARGET */
+    {"KKKKKKKK", "KPPKKPPK", "KPPSSPPK", "KKSSSSKK", "KKSSSSKK", "KPPSSPPK", "KPPKKPPK", "KKKKKKKK"}, /* PLUS */
+    {"KKKKKKKK", "KPPPPPPK", "KSPSSPSK", "KSPSSPSK", "KSPSSPSK", "KSPSSPSK", "KPPPPPPK", "KKKKKKKK"}, /* STRIPE */
+    {"KKKKKKKK", "KPPKKPPK", "KPKSSKPK", "KKSPPSKK", "KKSPPSKK", "KPKSSKPK", "KPPKKPPK", "KKKKKKKK"}, /* GEM */
+};
+/* each icon's cube frames, as ST_CUBE holds them (the ROM copies the
+ * player's there) */
+static Tile s_icons[ICON_COUNT][CUBE_FRAMES * 4];
+
 static void make_sprites(void)
 {
-    static const char *const CUBE[8] = {"KKKKKKKK", "KPPPPPPK", "KPKKKKPK", "KPKSSKPK",
-                                        "KPKSSKPK", "KPKKKKPK", "KPPPPPPK", "KKKKKKKK"};
     static const char *const SHIP[10] = {
         "......KKKK....",
         ".KK...KPPK....",
@@ -652,7 +754,14 @@ static void make_sprites(void)
     };
     static const char *const WAVE[8] = {"KK......", "KPKK....", "KPPPKK..", "KPSSPPK.",
                                         "KPSSPPK.", "KPPPKK..", "KPKK....", "KK......"};
-    rotated_frames(CUBE, 8, 8, ST_CUBE, CUBE_FRAMES, 0.0, 15.0);
+    for (int i = 0; i < ICON_COUNT; i++) {
+        rotated_frames(ICON_ART[i], 8, 8, ST_CUBE, CUBE_FRAMES, 0.0, 15.0);
+        memcpy(s_icons[i], &s_ui[ST_CUBE], sizeof(s_icons[i]));
+        Tile t;
+        art(&t, ICON_ART[i], ".PSK");
+        half_down(&t, &s_ui[UT_ICON + 2 * i]);
+    }
+    memcpy(&s_ui[ST_CUBE], s_icons[0], sizeof(s_icons[0]));
     rotated_frames(SHIP, 14, 10, ST_SHIP, SHIP_FRAMES, -30.0, 10.0);
     rotated_frames(BALL, 8, 8, ST_BALL, BALL_FRAMES, 0.0, 22.5);
     rotated_frames(UFO, 12, 10, ST_UFO, UFO_FRAMES, -15.0, 15.0);
@@ -889,9 +998,9 @@ typedef struct {
     int bpm;
 } GSong;
 
-/* Melodic notes of one track: on at their start, off at their end where
- * the next note doesn't start right then. */
-static void track_notes(CEvList *l, const AudioNote *ev, int nev, int track, int gi, int bpm, int lo)
+/* Melodic notes of one track, `shift` semitones up: on at their start,
+ * off at their end where the next note doesn't start right then. */
+static void track_notes(CEvList *l, const AudioNote *ev, int nev, int track, int gi, int bpm, int lo, int shift)
 {
     long last_off = -1;
     int top = -1;
@@ -906,7 +1015,7 @@ static void track_notes(CEvList *l, const AudioNote *ev, int nev, int track, int
         }
         long on = step_tick(ev[i].step, bpm), off = step_tick(ev[i].step + ev[i].len, bpm);
         if (last_off >= 0 && last_off < on) cev(l, last_off, 0, -1);
-        cev(l, on, fit_note(note, lo), -1);
+        cev(l, on, fit_note(note + shift, lo), -1);
         last_off = gb_sustains(gi) ? off : -1;
         top = note;
         i = j;
@@ -964,9 +1073,16 @@ static void build_song(int song, GSong *gs)
             note_prev = note;
         }
     }
-    /* channel 2: arpeggio; channel 3: bass */
-    track_notes(&l[1], ev, nev, TR_ARP, gb_inst(def->inst[TR_ARP]), bpm, 36);
-    track_notes(&l[2], ev, nev, TR_BASS, gb_inst(def->inst[TR_BASS]), bpm, 24);
+    /* channel 2: arpeggio; channel 3: bass. The saw and square bass play
+     * an octave up (55 Hz becomes 110): what the other versions play at
+     * 40-130 Hz is little more than a hum on a Game Boy's speaker, with
+     * the wave channel's 32 steps buzzing over it at under 2 kHz. The sub
+     * bass (a soft triangle, under the calm songs) keeps its octave. */
+    {
+        int gi = gb_inst(def->inst[TR_BASS]);
+        track_notes(&l[1], ev, nev, TR_ARP, gb_inst(def->inst[TR_ARP]), bpm, 36, 0);
+        track_notes(&l[2], ev, nev, TR_BASS, gi, bpm, 24, gi == GI_WAVE_TRI ? 0 : 12);
+    }
     /* channel 4: drums, the strongest of each step */
     for (int i = 0; i < nev;) {
         int best = -1, dr = 0;
@@ -987,7 +1103,18 @@ static void build_song(int song, GSong *gs)
     }
 }
 
-static int song_exported(int song) { return song != SONG_METRONOME; }
+/* The songs the Game Boy plays: the menu's, practice's and its levels'. */
+static int song_exported(int song)
+{
+    if (song == SONG_MENU || song == SONG_PRACTICE) return 1;
+    gb_levels(0);
+    for (int i = 0; i < s_gb_count; i++) {
+        LevelInfo info;
+        level_info(s_gb_level[i], &info);
+        if (SONG_FIRST_LEVEL + info.song == song) return 1;
+    }
+    return 0;
+}
 
 /* ------------------------------------------------------------------ */
 /* Export                                                              */
@@ -1024,23 +1151,63 @@ static void put_tiles(FILE *f, const char *name, const Tile *t, int n)
 
 static void put_rgb(FILE *f, Rgb c) { fprintf(f, "{%d, %d, %d}", c.r, c.g, c.b); }
 
+/* git describe's version, shortened for the title screen's 20 columns:
+ * "v1.1.0-6-g9906db9-dirty" -> "v1.1.0-6-9906db9*" (the ROM cuts what is
+ * still too long) */
+static void short_version(const char *v, char *out, size_t size)
+{
+    size_t n = 0, len = strlen(v);
+    int dirty = len >= 6 && !strcmp(v + len - 6, "-dirty");
+    if (dirty) len -= 6;
+    for (size_t i = 0; i < len && n + 2 < size; i++) {
+        /* the "g" before the commit hash */
+        if (v[i] == 'g' && i > 0 && v[i - 1] == '-' && i + 1 < len && isxdigit((unsigned char)v[i + 1])) continue;
+        if (v[i] == '"' || v[i] == '\\') continue;
+        out[n++] = v[i];
+    }
+    if (dirty) out[n++] = '*';
+    out[n] = 0;
+}
+
 static int cmd_export(const char *dir, const char *version)
 {
     char name[64];
     make_all_tiles();
 
-    /* levels, one bank each */
-    GLevel lv[16];
-    if (g_level_count > 6) die("more than 6 levels: give them more banks");
-    for (int i = 0; i < g_level_count; i++) {
-        build_level(i, &lv[i]);
-        if ((size_t)lv[i].width * GS_ROWS > BANK_SIZE) die("level does not fit a bank");
+    /* the levels that fit, one bank each */
+    GLevel lv[GB_MAX_LEVELS];
+    gb_levels(1);
+    if (!s_gb_count) die("no level fits the Game Boy");
+    for (int i = 0; i < s_gb_count; i++) {
+        build_level(s_gb_level[i], &lv[i]);
         snprintf(name, sizeof(name), "level%d.c", i);
         FILE *f = open_out(dir, name);
         fprintf(f, "#pragma bank %d\n#include <stdint.h>\n\n", BANK_LEVEL0 + i);
         fprintf(f, "/* %s: %d columns of %d tiles */\n", lv[i].name, lv[i].width, GS_ROWS);
         fprintf(f, "const uint8_t level%d_cells[%d] = {\n", i, lv[i].width * GS_ROWS);
         put_bytes(f, lv[i].cells, (size_t)lv[i].width * GS_ROWS);
+        fprintf(f, "};\n");
+        fclose(f);
+    }
+
+    /* the title's demo run: its level and its presses (as the other
+     * versions' title screen plays them, src/core/demo.c), in a bank */
+    GLevel demo;
+    if (build_level_src(demo_level_src(), -1, &demo) < 0) die(s_unfit);
+    {
+        FILE *f = open_out(dir, "demo.c");
+        fprintf(f, "#pragma bank %d\n#include <stdint.h>\n\n", BANK_DEMO);
+        fprintf(f, "/* %d columns of %d tiles */\nconst uint8_t demo_cells[%d] = {\n", demo.width, GS_ROWS,
+                demo.width * GS_ROWS);
+        put_bytes(f, demo.cells, (size_t)demo.width * GS_ROWS);
+        fprintf(f, "};\n\n/* the button is held while x (16.16) is in [x0, x1), or when a tick steps\n"
+                   " * over the whole range: the other versions' x >= x0 and x < x1 in floats */\n");
+        fprintf(f, "const uint32_t gbc_demo_press[%d][2] = {\n", demo_press_count());
+        for (int i = 0; i < demo_press_count(); i++) {
+            float x0, x1;
+            demo_press(i, &x0, &x1);
+            fprintf(f, "    {%ld, %ld},\n", (long)ceil((double)x0 * 65536.0), (long)ceil((double)x1 * 65536.0));
+        }
         fprintf(f, "};\n");
         fclose(f);
     }
@@ -1086,6 +1253,7 @@ static int cmd_export(const char *dir, const char *version)
         put_tiles(f, "gfx_logo", &s_bg[BT_LOGO], s_logo_count);
         put_tiles(f, "gfx_ui", s_ui, 256);
         put_tiles(f, "gfx_saw", s_saw, SAW_FRAMES);
+        put_tiles(f, "gfx_icons", &s_icons[0][0], ICON_COUNT * CUBE_FRAMES * 4);
         fprintf(f, "const uint8_t gfx_logo_map[%d] = {\n", LOGO_W * LOGO_H);
         put_bytes(f, &s_logo_map[0][0], LOGO_W * LOGO_H);
         fprintf(f, "};\n");
@@ -1096,7 +1264,9 @@ static int cmd_export(const char *dir, const char *version)
     {
         FILE *f = open_out(dir, "gbc_data.c");
         fprintf(f, "#include \"gbc_data.h\"\n\n");
-        fprintf(f, "const char gbc_version[] = \"%s\";\n\n", version);
+        char ver[64];
+        short_version(version, ver, sizeof(ver));
+        fprintf(f, "const char gbc_version[] = \"%s\";\n\n", ver);
         /* channel 1/2 frequency registers of MIDI notes 36..119: 2048 - 131072 / f
          * (channel 3 plays a note an octave below its register's value) */
         fprintf(f, "const uint16_t gbc_freq[84] = {");
@@ -1108,18 +1278,22 @@ static int cmd_export(const char *dir, const char *version)
         fprintf(f, "/* palette of each background tile */\nconst uint8_t gfx_bg_attr[256] = {\n");
         put_bytes(f, s_bg_pal, 256);
         fprintf(f, "};\n\n");
-        for (int i = 0; i < g_level_count; i++) {
+        for (int i = 0; i < s_gb_count; i++) {
             fprintf(f, "static const GbTrigger trig%d[%d] = {", i, lv[i].ntrig ? lv[i].ntrig : 1);
             for (int t = 0; t < lv[i].ntrig; t++) fprintf(f, "{%d, %d}, ", lv[i].trig[t].x, lv[i].trig[t].pal);
             fprintf(f, "%s};\n", lv[i].ntrig ? "" : "{0, 0}");
         }
-        fprintf(f, "\nconst GbLevel gbc_levels[%d] = {\n", g_level_count);
-        for (int i = 0; i < g_level_count; i++) {
+        fprintf(f, "\nconst GbLevel gbc_levels[%d] = {\n", s_gb_count);
+        for (int i = 0; i < s_gb_count; i++) {
             const GLevel *g = &lv[i];
-            fprintf(f, "    {\"%s\", %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, level%d_cells, trig%d},\n", g->name, g->diff,
-                    g->stars, g->song, g->speed, g->pal, g->height, g->ncoins, BANK_LEVEL0 + i, g->ntrig, g->width, i, i);
+            fprintf(f, "    {\"%s\", %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, level%d_cells, trig%d},\n", g->name,
+                    g->diff, g->stars, g->song, g->speed, g->pal, g->height, g->ncoins, BANK_LEVEL0 + i, g->ntrig,
+                    s_gb_level[i], g->width, i, i);
         }
-        fprintf(f, "};\n\nconst GbSong gbc_songs[%d] = {\n", g_song_count);
+        fprintf(f, "};\n\nstatic const GbTrigger trig_demo[1] = {{0, 0}};\n");
+        fprintf(f, "const GbLevel gbc_demo_level = {\"DEMO\", 0, 0, %d, %d, %d, %d, 0, %d, 0, 255, %d, demo_cells, "
+                   "trig_demo};\n", demo.song, demo.speed, demo.pal, demo.height, BANK_DEMO, demo.width);
+        fprintf(f, "\nconst GbSong gbc_songs[%d] = {\n", g_song_count);
         for (int s = 0; s < g_song_count; s++) {
             if (!song_exported(s)) {
                 fprintf(f, "    {0, 120, {0, 0, 0, 0}, {0, 0, 0, 0}},\n");
@@ -1159,7 +1333,14 @@ static int cmd_export(const char *dir, const char *version)
             put_rgb(f, FIXED[k]);
             fprintf(f, ",");
         }
-        fprintf(f, "\n};\n\n/* sprite palettes: player, effects, checkpoints */\nconst uint8_t gbc_obj_pals[3][4][3] = {\n");
+        fprintf(f, "\n};\n\n/* the garage's player colours (src/core/theme.c), 5-bit */\n");
+        fprintf(f, "const uint8_t gbc_player_colors[%d][3] = {", PLAYER_COLOR_COUNT);
+        for (int k = 0; k < PLAYER_COLOR_COUNT; k++)
+            fprintf(f, "%s{%d, %d, %d},", k % 4 ? " " : "\n    ", (int)COL_R(g_player_colors[k]) >> 3,
+                    (int)COL_G(g_player_colors[k]) >> 3, (int)COL_B(g_player_colors[k]) >> 3);
+        fprintf(f, "\n};\n\nconst char *const gbc_icon_names[%d] = {", ICON_COUNT);
+        for (int k = 0; k < ICON_COUNT; k++) fprintf(f, "\"%s\",%s", g_icon_names[k], k + 1 < ICON_COUNT ? " " : "");
+        fprintf(f, "};\n\n/* sprite palettes: player, effects, checkpoints */\nconst uint8_t gbc_obj_pals[3][4][3] = {\n");
         for (int k = 0; k < 3; k++) {
             fprintf(f, "    {");
             for (int c = 0; c < 4; c++) {
@@ -1176,20 +1357,31 @@ static int cmd_export(const char *dir, const char *version)
         FILE *f = open_out(dir, "gbc_data.h");
         fprintf(f, "#ifndef GBC_DATA_H\n#define GBC_DATA_H\n\n#include <stdint.h>\n\n");
         fprintf(f, "#include \"../../../src/gbc/leveldata.h\"\n#include \"../../../src/gbc/musicdata.h\"\n\n");
-        fprintf(f, "#define GBC_LEVEL_COUNT %d\n#define GBC_SONG_COUNT %d\n#define GBC_BANK_GFX %d\n", g_level_count,
+        fprintf(f, "#define GBC_LEVEL_COUNT %d\n#define GBC_SONG_COUNT %d\n#define GBC_BANK_GFX %d\n", s_gb_count,
                 g_song_count, BANK_GFX);
         fprintf(f, "#define GBC_ROM_BANKS %d\n#define GFX_BG_COUNT %d\n#define GFX_LOGO_COUNT %d\n", ROM_BANKS,
                 s_bg_count, s_logo_count);
         fprintf(f, "#define GFX_LOGO_W %d\n#define GFX_LOGO_H %d\n\n", LOGO_W, LOGO_H);
         fprintf(f, "extern const char gbc_version[];\nextern const uint8_t gfx_bg_attr[256];\n");
         fprintf(f, "extern const uint16_t gbc_freq[84]; /* MIDI notes 36..119 */\n");
+        fprintf(f, "#define GBC_PALETTE_COUNT %d\n", PALETTE_COUNT);
         fprintf(f, "/* bank %d */\nextern const GbLevelPal gbc_level_pals[%d];\n", BANK_UI, PALETTE_COUNT);
         fprintf(f, "extern const uint8_t gbc_fixed_colors[FC_COUNT][3];\nextern const uint8_t gbc_obj_pals[3][4][3];\n");
         fprintf(f, "extern const uint8_t gbc_lerp5[33][32];\n");
-        fprintf(f, "extern const GbLevel gbc_levels[%d];\nextern const GbSong gbc_songs[%d];\n\n", g_level_count,
+        fprintf(f, "#define ICON_COUNT %d\n#define PLAYER_COLOR_COUNT %d\n", ICON_COUNT, PLAYER_COLOR_COUNT);
+        fprintf(f, "extern const uint8_t gbc_player_colors[PLAYER_COLOR_COUNT][3];\n");
+        fprintf(f, "extern const char *const gbc_icon_names[ICON_COUNT];\n");
+        fprintf(f, "extern const GbLevel gbc_levels[%d];\nextern const GbSong gbc_songs[%d];\n\n", s_gb_count,
                 g_song_count);
         fprintf(f, "/* bank GBC_BANK_GFX */\nextern const uint8_t gfx_bg[], gfx_logo[], gfx_ui[], gfx_saw[], gfx_logo_map[];\n");
-        for (int i = 0; i < g_level_count; i++) fprintf(f, "extern const uint8_t level%d_cells[];\n", i);
+        fprintf(f, "extern const uint8_t gfx_icons[]; /* ICON_COUNT x CUBE_FRAMES x 4 tiles */\n");
+        for (int i = 0; i < s_gb_count; i++) fprintf(f, "extern const uint8_t level%d_cells[];\n", i);
+        fprintf(f, "/* the title's demo run (src/core/demo.c): its level, its presses (in its\n"
+                   " * bank), and where it loops: from x = WRAP back by LOOP blocks */\n");
+        fprintf(f, "extern const GbLevel gbc_demo_level;\nextern const uint8_t demo_cells[];\n");
+        fprintf(f, "#define GBC_DEMO_PRESSES %d\nextern const uint32_t gbc_demo_press[GBC_DEMO_PRESSES][2];\n",
+                demo_press_count());
+        fprintf(f, "#define GBC_DEMO_LOOP %d\n#define GBC_DEMO_WRAP %d\n", DEMO_LOOP, (int)DEMO_WRAP);
         for (int s = 0; s < g_song_count; s++)
             if (song_exported(s)) fprintf(f, "extern const uint8_t song%d_ch0[], song%d_ch1[], song%d_ch2[], song%d_ch3[];\n", s, s, s, s);
         fprintf(f, "\n#endif\n");
@@ -1200,10 +1392,11 @@ static int cmd_export(const char *dir, const char *version)
         if (song_exported(s))
             for (int c = 0; c < 4; c++) song_bytes += songs[s].ch[c].n;
     printf("exported %d levels, %d background tiles + %d logo tiles, %d bytes of music in banks %d..%d\n",
-           g_level_count, s_bg_count, s_logo_count, song_bytes, BANK_SONG0, bank);
-    for (int i = 0; i < g_level_count; i++) {
+           s_gb_count, s_bg_count, s_logo_count, song_bytes, BANK_SONG0, bank);
+    free(demo.cells);
+    for (int i = 0; i < s_gb_count; i++) {
         if (lv[i].portal_overlaps)
-            printf("  note: level %d: %d portal ends hidden behind other tiles\n", i, lv[i].portal_overlaps);
+            printf("  note: level %d: %d portal ends hidden behind other tiles\n", s_gb_level[i], lv[i].portal_overlaps);
         free(lv[i].cells);
     }
     return 0;
@@ -1279,7 +1472,7 @@ static int cmd_view(int idx, double px, const char *out)
 {
     make_all_tiles();
     GLevel g;
-    build_level(idx, &g);
+    if (build_level(idx, &g) < 0) die(s_unfit);
     const int S = 3, W = 160 * S, H = 144 * S;
     uint8_t *img = (uint8_t *)calloc((size_t)W * H * 3, 1);
     int pal = g.pal;
@@ -1324,289 +1517,38 @@ static int cmd_view(int idx, double px, const char *out)
 }
 
 /* ------------------------------------------------------------------ */
-/* Solver (breadth-first beam search, as in pd_tool)                   */
+/* Scripts for the emulator test                                       */
 /* ------------------------------------------------------------------ */
 
-#define MAX_TICKS 20000
-#define BEAM 20000
-#define HSIZE 65536
-#define ORB_TAP_TICKS 6
-
-typedef struct {
-    GsPlayer p;
-    uint8_t prev;
-    uint16_t press_t;
-} Node;
-
-static Node *s_cur, *s_next;
-static uint16_t *s_par[MAX_TICKS];
-static uint8_t *s_inp[MAX_TICKS];
-static uint64_t s_hash[HSIZE];
-static uint16_t s_tmp_par[BEAM];
-static uint8_t s_tmp_inp[BEAM];
-static uint8_t s_sol[MAX_TICKS];
-static uint8_t s_best_sol[MAX_TICKS]; /* inputs of the furthest attempt */
-static long s_nodes;
-static uint32_t s_best_x;
-static int s_K, s_phase, s_rhythm;
-static uint8_t s_grid[MAX_TICKS];
-
-static uint64_t mix64(uint64_t h, uint64_t v)
+/* Inputs that finish level idx (the solver's, preferring coarse ones) in
+ * g_sol; returns the ticks to finish, or -1 (then g_sol: the furthest run). */
+static int solution(int idx)
 {
-    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    return h * 0xff51afd7ed558ccdULL;
-}
-
-/* States closer than 1/16 block (and 1/2 block/s) count as the same. */
-static uint64_t state_key(const GsPlayer *p, int input)
-{
-    uint64_t h = 1469598103934665603ULL;
-    h = mix64(h, (uint64_t)(int64_t)(p->y >> 12));
-    h = mix64(h, (uint64_t)(int64_t)(p->vy >> 7));
-    h = mix64(h, (uint64_t)(p->x >> 12));
-    h = mix64(h, (uint64_t)(p->mode | ((p->grav + 1) << 4) | (p->grounded << 6) | (p->buf << 7) |
-                            (p->speed_idx << 8) | (input << 11) | ((uint64_t)p->coins << 13)));
-    for (int i = 0; i < GS_USED_N; i++) h = mix64(h, p->used[i]);
-    return h | 1u;
-}
-
-static int hash_insert(uint64_t k)
-{
-    uint32_t i = (uint32_t)(k >> 24) & (HSIZE - 1);
-    for (;;) {
-        if (s_hash[i] == k) return 0;
-        if (s_hash[i] == 0) {
-            s_hash[i] = k;
-            return 1;
-        }
-        i = (i + 1) & (HSIZE - 1);
-    }
-}
-
-static void backtrack(int t, int idx, uint8_t *dst)
-{
-    for (int k = t; k > 0; k--) {
-        dst[k - 1] = s_inp[k][idx];
-        idx = s_par[k][idx];
-    }
-}
-
-static int input_allowed(int t, const GsPlayer *p, int prev, int held)
-{
-    if (held == prev) return 1;
-    int coarse = ((t - s_phase) % s_K + s_K) % s_K == 0;
-    if (!s_rhythm || !held || p->mode == GM_SHIP || p->mode == GM_WAVE) return coarse;
-    return s_grid[t];
-}
-
-static void rhythm_grid(int bpm, int offset)
-{
-    double step = 1800.0 / bpm; /* ticks per 8th */
-    memset(s_grid, 0, sizeof(s_grid));
-    for (int k = 0;; k++) {
-        int t = (int)lround(k * step) + offset;
-        if (t >= MAX_TICKS) break;
-        if (t >= 0) s_grid[t] = 1;
-    }
-}
-
-static void tick_node(Node *n, int held)
-{
-    gs_p = n->p;
-    gs_step((uint8_t)held, (uint8_t)(held && !n->prev));
-    n->p = gs_p;
-    n->prev = (uint8_t)held;
-}
-
-static int solve(const GLevel *g, int K, int phase)
-{
-    use_level(g);
-    s_K = K;
-    s_phase = phase;
-    if (!s_cur) {
-        s_cur = (Node *)malloc(sizeof(Node) * BEAM);
-        s_next = (Node *)malloc(sizeof(Node) * BEAM);
-    }
-    for (int t = 0; t < MAX_TICKS; t++) {
-        free(s_par[t]);
-        free(s_inp[t]);
-        s_par[t] = NULL;
-        s_inp[t] = NULL;
-    }
-    s_nodes = 0;
-    s_best_x = 0;
-    int ncur = 1, result = -1;
-    gs_reset((uint8_t)g->speed);
-    s_cur[0].p = gs_p;
-    s_cur[0].prev = 0;
-    s_cur[0].press_t = 0;
-    for (int t = 0; t < MAX_TICKS - 1 && ncur > 0; t++) {
-        int nnext = 0;
-        memset(s_hash, 0, sizeof(s_hash));
-        for (int i = 0; i < ncur && result < 0; i++) {
-            for (int held = 0; held < 2; held++) {
-                if (!input_allowed(t, &s_cur[i].p, s_cur[i].prev, held)) continue;
-                Node n = s_cur[i];
-                if (held && !n.prev) n.press_t = (uint16_t)t;
-                tick_node(&n, held);
-                s_nodes++;
-                if (n.p.dead) continue;
-                int fresh = s_rhythm && held && t - n.press_t <= ORB_TAP_TICKS;
-                if (s_rhythm && (n.p.events & GE_ORB) && t - n.press_t > ORB_TAP_TICKS) continue;
-                if (n.p.done) {
-                    s_tmp_par[0] = (uint16_t)i;
-                    s_tmp_inp[0] = (uint8_t)held;
-                    result = t + 1;
-                    break;
-                }
-                if (nnext >= BEAM || !hash_insert(state_key(&n.p, held | fresh << 1))) continue;
-                s_tmp_par[nnext] = (uint16_t)i;
-                s_tmp_inp[nnext] = (uint8_t)held;
-                s_next[nnext++] = n;
-            }
-        }
-        int keep = result >= 0 ? 1 : nnext;
-        s_par[t + 1] = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)(keep > 0 ? keep : 1));
-        s_inp[t + 1] = (uint8_t *)malloc((size_t)(keep > 0 ? keep : 1));
-        memcpy(s_par[t + 1], s_tmp_par, sizeof(uint16_t) * (size_t)keep);
-        memcpy(s_inp[t + 1], s_tmp_inp, (size_t)keep);
-        if (result >= 0) {
-            backtrack(t + 1, 0, s_sol);
-            break;
-        }
-        int best_i = -1;
-        for (int i = 0; i < nnext; i++)
-            if (s_next[i].p.x > s_best_x) {
-                s_best_x = s_next[i].p.x;
-                best_i = i;
-            }
-        if (best_i >= 0) backtrack(t + 1, best_i, s_best_sol);
-        Node *tmp = s_cur;
-        s_cur = s_next;
-        s_next = tmp;
-        ncur = nnext;
-    }
-    return result;
-}
-
-/* Replay s_sol: does it finish, and does it go through every portal? */
-static int replay_check(const GLevel *g, int verbose)
-{
-    use_level(g);
-    gs_reset((uint8_t)g->speed);
-    Node n = {gs_p, 0, 0};
-    int nportal = 0, hit = 0;
-    for (int x = 0; x < g->width; x++)
-        for (int y = 0; y < GS_ROWS; y++) {
-            int k = GTI_KIND(gs_tile_info[CELL(g, x, y)]);
-            if (k >= GT_PORTAL_CUBE && k <= GT_SPEED_3) nportal++;
-        }
-    while (!n.p.done && !n.p.dead && n.p.ticks < MAX_TICKS) {
-        tick_node(&n, s_sol[n.p.ticks]);
-        if (n.p.events & (GE_PORTAL | GE_SPEED)) hit++;
-    }
-    if (verbose && hit != nportal) printf("  WARNING: %d of %d portals passed through\n", hit, nportal);
-    return n.p.done && hit == nportal;
-}
-
-static int solve_level(int idx, int maxK)
-{
-    GLevel g;
-    build_level(idx, &g);
-    printf("level %d \"%s\" width=%d\n", idx, g.name, g.width);
-    int all_ok = 1;
-    for (int K = 1; K <= maxK; K++) {
-        int okc = 0;
-        for (int ph = 0; ph < K; ph++) {
-            int t = solve(&g, K, ph);
-            if (t >= 0 && replay_check(&g, 1)) {
-                okc++;
-                if (K == 1) printf("  K=1: solved in %d ticks (%.1f s), %ld states\n", t, t / 60.0, s_nodes);
-            } else if (t < 0) {
-                printf("  K=%d phase=%d: FAILED, furthest x=%.1f (%d%%)\n", K, ph, s_best_x / 65536.0,
-                       (int)(s_best_x / 65536.0 / g.width * 100));
-            }
-        }
-        printf("  K=%d: %d/%d phases solvable\n", K, okc, K);
-        if (okc < K) all_ok = 0;
-    }
-    free(g.cells);
-    return all_ok;
-}
-
-static int rhythm_level(int idx, int tol)
-{
-    GLevel g;
-    build_level(idx, &g);
-    int bpm = (int)lround(g_songs[SONG_FIRST_LEVEL + g.song]->bpm);
-    int ok = 1;
-    s_rhythm = 1;
-    for (int off = -tol; off <= tol; off += tol ? tol : 1) {
-        rhythm_grid(bpm, off);
-        int t = solve(&g, 3, 0);
-        int good = t >= 0 && replay_check(&g, 0);
-        printf("level %d \"%s\" on the beat, %+d ticks: %s", idx, g.name, off, good ? "ok\n" : "FAILED");
-        if (!good) {
-            printf(", furthest x=%.1f (%d%%)\n", s_best_x / 65536.0, (int)(s_best_x / 65536.0 / g.width * 100));
-            ok = 0;
-        }
-        if (!tol) break;
-    }
-    s_rhythm = 0;
-    free(g.cells);
-    return ok;
+    Level *L = level_parse(g_levels[idx].src);
+    int t = -1;
+    for (int K = 3; K >= 1 && t < 0; K--) t = solve(L, K, 0, NULL);
+    if (t < 0) memcpy(g_sol, g_best_sol, sizeof(g_sol));
+    level_free(L);
+    return t;
 }
 
 static int cmd_script(int idx, const char *out)
 {
-    GLevel g;
-    build_level(idx, &g);
-    int t = -1;
-    for (int K = 3; K >= 1 && t < 0; K--) t = solve(&g, K, 0);
+    LevelInfo info;
+    level_info(idx, &info);
+    int t = solution(idx);
     if (t < 0) die("no solution");
     FILE *f = fopen(out, "w");
     if (!f) die("cannot write the script");
-    fprintf(f, "# %s: presses (tick from the attempt start, ticks held); finishes after %d ticks\n", g.name, t);
+    fprintf(f, "# %s: presses (tick from the attempt start, ticks held); finishes after %d ticks\n", info.name, t);
     for (int i = 0; i < t; i++) {
-        if (!s_sol[i] || (i > 0 && s_sol[i - 1])) continue;
+        if (!g_sol[i] || (i > 0 && g_sol[i - 1])) continue;
         int n = 0;
-        while (i + n < t && s_sol[i + n]) n++;
+        while (i + n < t && g_sol[i + n]) n++;
         fprintf(f, "%d %d\n", i, n);
     }
     fclose(f);
     printf("%s: %d ticks\n", out, t);
-    free(g.cells);
-    return 0;
-}
-
-/* Player state along the solver's path between x0 and x1 (with off: the
- * rhythm check's run at that offset), the furthest attempt if it fails. */
-static int cmd_trace(int idx, double x0, double x1, int rhythm, int off)
-{
-    GLevel g;
-    build_level(idx, &g);
-    if (rhythm) {
-        rhythm_grid((int)lround(g_songs[SONG_FIRST_LEVEL + g.song]->bpm), off);
-        s_rhythm = 1;
-    }
-    if (solve(&g, rhythm ? 3 : 1, 0) < 0) {
-        printf("no solution; tracing the furthest attempt\n");
-        memcpy(s_sol, s_best_sol, sizeof(s_sol));
-    }
-    s_rhythm = 0;
-    use_level(&g);
-    gs_reset((uint8_t)g.speed);
-    Node n = {gs_p, 0, 0};
-    while (!n.p.done && !n.p.dead && n.p.ticks < MAX_TICKS) {
-        int h = s_sol[n.p.ticks];
-        tick_node(&n, h);
-        double x = n.p.x / 65536.0;
-        if (x >= x0 && x <= x1)
-            printf("t=%4d x=%6.2f y=%6.2f vy=%6.2f mode=%d grav=%d grounded=%d held=%d floor=%d ceil=%d ev=%x%s\n",
-                   n.p.ticks, x, n.p.y / 65536.0, n.p.vy * 240.0 / 65536.0, n.p.mode, n.p.grav, n.p.grounded, h,
-                   n.p.floor_y, n.p.ceil_y, n.p.events, n.p.dead ? " DEAD" : "");
-    }
-    free(g.cells);
     return 0;
 }
 
@@ -1614,7 +1556,6 @@ static int cmd_trace(int idx, double x0, double x1, int rhythm, int off)
  * "tick x y vy mode grav dead done" with x, y, vy in their raw units. */
 static int cmd_replay(int idx, const char *path)
 {
-    GLevel g;
     FILE *f = fopen(path, "r");
     char line[256];
     static uint8_t held[MAX_TICKS];
@@ -1626,16 +1567,139 @@ static int cmd_replay(int idx, const char *path)
             for (int k = 0; k < n && t + k < MAX_TICKS; k++) held[t + k] = 1;
     }
     fclose(f);
-    build_level(idx, &g);
-    use_level(&g);
-    gs_reset((uint8_t)g.speed);
-    Node n = {gs_p, 0, 0};
-    while (!n.p.done && !n.p.dead && n.p.ticks < MAX_TICKS) {
-        tick_node(&n, held[n.p.ticks]);
-        printf("%d %u %d %d %d %d %d %d\n", n.p.ticks, n.p.x, n.p.y, n.p.vy, n.p.mode, n.p.grav, n.p.dead, n.p.done);
+    Level *L = level_parse(g_levels[idx].src);
+    Player p;
+    sim_reset(&p, L);
+    int prev = 0;
+    while (!p.done && !p.dead && p.ticks < MAX_TICKS) {
+        int h = held[p.ticks];
+        sim_tick(&p, L, h, h && !prev);
+        prev = h;
+        printf("%d %u %d %d %d %d %d %d\n", p.ticks, (uint32_t)p.x, p.y, p.vy, p.mode, p.grav, p.dead, p.done);
     }
-    free(g.cells);
+    level_free(L);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* The Game Boy's physics against the reference (src/core/sim.c)       */
+/* ------------------------------------------------------------------ */
+
+static uint64_t s_rng = 0x9e3779b97f4a7c15ULL;
+
+static uint32_t rnd(uint32_t n)
+{
+    s_rng ^= s_rng << 13;
+    s_rng ^= s_rng >> 7;
+    s_rng ^= s_rng << 17;
+    return (uint32_t)(s_rng >> 32) % n;
+}
+
+/* Does the Game Boy's player say the same as the reference's? If not, why. */
+static int same_player(const GsPlayer *a, const Player *b, const Level *L, char *why, size_t cap)
+{
+#define FIELD(name, va, vb) \
+    if ((long long)(va) != (long long)(vb)) { \
+        snprintf(why, cap, "%s: Game Boy %lld, reference %lld", name, (long long)(va), (long long)(vb)); \
+        return 0; \
+    }
+    FIELD("x", a->x, (uint32_t)b->x);
+    FIELD("x fraction", a->xfrac, b->xf);
+    FIELD("y", a->y, b->y);
+    FIELD("vy", a->vy, b->vy);
+    FIELD("mode", a->mode, b->mode);
+    FIELD("gravity", a->grav, b->grav);
+    FIELD("speed", a->speed_idx, b->speed_idx);
+    FIELD("grounded", a->grounded, b->grounded);
+    FIELD("press buffered", a->buf, b->buf);
+    FIELD("dead", a->dead, b->dead);
+    FIELD("done", a->done, b->done);
+    FIELD("coins", a->coins, b->coins);
+    FIELD("events", a->events, b->events);
+    FIELD("ticks", a->ticks, b->ticks);
+    FIELD("jumps", a->jumps, b->jumps);
+    if (a->mode != MODE_CUBE) {
+        FIELD("corridor floor", a->floor_y, b->floor_y);
+        FIELD("corridor ceiling", a->ceil_y, b->ceil_y);
+    }
+    if (b->events & (EV_ORB | EV_PAD | EV_PORTAL | EV_SPEED | EV_COIN)) {
+        const LevelObj *o = &L->objs[b->ev_obj];
+        FIELD("event's cell", a->ev_cell, (o->cx << 4) | o->cy);
+    }
+#undef FIELD
+    return 1;
+}
+
+/* Play the inputs (held per tick, then released) on both; 0 and why at the
+ * first tick they differ. */
+static long s_diff_ticks;
+
+static int diff_run(const GLevel *g, const Level *L, const uint8_t *in, int n, char *why, size_t cap)
+{
+    Player r;
+    sim_reset(&r, L);
+    use_level(g);
+    gs_reset((uint8_t)g->speed);
+    int prev = 0;
+    while (!r.dead && !r.done && r.ticks < MAX_TICKS) {
+        int t = r.ticks, h = t < n ? in[t] : 0;
+        sim_tick(&r, L, h, h && !prev);
+        gs_step((uint8_t)h, (uint8_t)(h && !prev));
+        prev = h;
+        s_diff_ticks++;
+        if (!same_player(&gs_p, &r, L, why, cap)) {
+            size_t k = strlen(why);
+            snprintf(why + k, cap - k, " (tick %d, x=%.3f y=%.3f mode %d)", t, r.x / 65536.0, r.y / 65536.0, r.mode);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The solver's run of each level, and `runs` runs that leave it at a random
+ * tick (one press more or less, a stretch of random presses, or random
+ * presses from there on) and so go off on their own until they die. */
+static int cmd_difftest(int first, int last, int runs)
+{
+    static uint8_t base[MAX_TICKS], in[MAX_TICKS];
+    char why[256];
+    int fails = 0;
+    for (int idx = first; idx <= last; idx++) {
+        GLevel g;
+        if (build_level(idx, &g) < 0) {
+            printf("level %d: not on the Game Boy (%s)\n", idx, s_unfit);
+            continue;
+        }
+        Level *L = level_parse(g_levels[idx].src);
+        int t_end = solution(idx);
+        if (t_end < 0) t_end = MAX_TICKS;
+        memcpy(base, g_sol, sizeof(base));
+        long before = s_diff_ticks;
+        int ok = diff_run(&g, L, base, t_end, why, sizeof(why));
+        for (int k = 0; ok && k < runs; k++) {
+            memcpy(in, base, sizeof(in));
+            int t0 = (int)rnd((uint32_t)t_end), kind = (int)rnd(3);
+            if (kind == 0) {
+                in[t0] = (uint8_t)!in[t0];
+            } else {
+                int t1 = kind == 1 ? t0 + 10 + (int)rnd(80) : MAX_TICKS;
+                for (int t = t0; t < t1 && t < MAX_TICKS;) {
+                    int len = 1 + (int)rnd(rnd(4) ? 12 : 40), h = (int)rnd(2);
+                    for (int j = 0; j < len && t < t1 && t < MAX_TICKS; j++) in[t++] = (uint8_t)h;
+                }
+            }
+            ok = diff_run(&g, L, in, MAX_TICKS, why, sizeof(why));
+        }
+        printf("level %d \"%s\": %s (%ld ticks compared)\n", idx, g.name, ok ? "the same" : "DIFFERENT",
+               s_diff_ticks - before);
+        if (!ok) printf("  %s\n", why);
+        fails += !ok;
+        level_free(L);
+        free(g.cells);
+    }
+    printf("%s\n", fails ? "THE GAME BOY'S PHYSICS DIFFERS FROM THE REFERENCE"
+                         : "the Game Boy's physics gives the same results as the reference");
+    return fails ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1653,7 +1717,7 @@ static int level_arg(const char *s)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: gbc_tool export|solve|rhythm|script|sheet|view|music ...\n");
+        fprintf(stderr, "usage: gbc_tool export|levels|difftest|script|replay|sheet|view|music ...\n");
         return 2;
     }
     font_init();
@@ -1665,16 +1729,15 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "view") && argc >= 5) return cmd_view(level_arg(argv[2]), atof(argv[3]), argv[4]);
     if (!strcmp(cmd, "script") && argc >= 4) return cmd_script(level_arg(argv[2]), argv[3]);
     if (!strcmp(cmd, "replay") && argc >= 4) return cmd_replay(level_arg(argv[2]), argv[3]);
-    if (!strcmp(cmd, "trace") && argc >= 5)
-        return cmd_trace(level_arg(argv[2]), atof(argv[3]), atof(argv[4]), argc > 5, argc > 5 ? atoi(argv[5]) : 0);
-    if (!strcmp(cmd, "solve") || !strcmp(cmd, "rhythm")) {
-        int rhythm = !strcmp(cmd, "rhythm");
-        int arg = argc > 3 ? atoi(argv[3]) : (rhythm ? 2 : 1);
-        int fails = 0, first = 0, last = g_level_count - 1;
+    if (!strcmp(cmd, "levels")) {
+        gb_levels(1);
+        for (int i = 0; i < s_gb_count; i++) printf("%d %d\n", i, s_gb_level[i]);
+        return 0;
+    }
+    if (!strcmp(cmd, "difftest")) {
+        int first = 0, last = g_level_count - 1;
         if (argc > 2 && strcmp(argv[2], "all")) first = last = level_arg(argv[2]);
-        for (int i = first; i <= last; i++) fails += rhythm ? !rhythm_level(i, arg) : !solve_level(i, arg);
-        printf("%s\n", fails ? "SOME LEVELS FAILED ON THE GBC PHYSICS" : "all levels pass on the GBC physics");
-        return fails ? 1 : 0;
+        return cmd_difftest(first, last, argc > 3 ? atoi(argv[3]) : 2000);
     }
     fprintf(stderr, "unknown command\n");
     return 2;

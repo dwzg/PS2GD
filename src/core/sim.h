@@ -1,35 +1,23 @@
 /*
- * Deterministic player simulation. One call to sim_tick advances the player
- * by 1/60 s using fixed sub-steps; it never touches rendering or audio so the
- * level solver can run it millions of times.
+ * Deterministic player simulation: the reference implementation of the
+ * rules in sim_rules.h, in integers, so that it gives the same results on
+ * every platform (and as fast as a CPU without floating point can). One
+ * call to sim_tick advances the player by 1/60 s in fixed sub-steps; it
+ * never touches rendering or audio so the level solver can run it millions
+ * of times.
  */
 #ifndef PD_SIM_H
 #define PD_SIM_H
 
 #include "level.h"
 
-/* Horizontal speeds in blocks per second for speed portals 0..3. */
-extern const float SIM_SPEEDS[4];
-
-/* Events raised during a tick (for effects and sound). */
-enum {
-    EV_JUMP = 1u << 0,
-    EV_LAND = 1u << 1,
-    EV_ORB = 1u << 2,
-    EV_PAD = 1u << 3,
-    EV_PORTAL = 1u << 4,
-    EV_GRAVITY = 1u << 5,
-    EV_COIN = 1u << 6,
-    EV_DEATH = 1u << 7,
-    EV_COMPLETE = 1u << 8,
-    EV_SPEED = 1u << 9
-};
-
 typedef struct {
-    float x, y, vy;
-    float speed;
-    float floor_y, ceil_y; /* corridor bounds for non-cube modes */
-    int8_t grav;           /* +1 normal, -1 upside down */
+    int32_t x;   /* 16.16 blocks (negative: before the start) */
+    uint16_t xf; /* and 1/65536 of its last unit */
+    int32_t y;   /* 16.16 blocks */
+    int16_t vy;  /* 1/65536 block per sub-step */
+    int8_t floor_y, ceil_y; /* corridor rows for non-cube modes */
+    int8_t grav;            /* +1 normal, -1 upside down */
     uint8_t mode;
     uint8_t speed_idx;
     uint8_t grounded;
@@ -37,10 +25,10 @@ typedef struct {
     uint8_t dead;
     uint8_t done;
     uint8_t coins; /* bitmask collected this attempt */
-    uint32_t events; /* events of the most recent tick */
-    int ticks;
-    int jumps;
-    /* object that raised the last orb/pad/portal event (for effects) */
+    uint16_t events; /* EV_* of the most recent tick */
+    uint16_t ticks;
+    uint16_t jumps;
+    /* object that raised the last orb/pad/portal/coin event (for effects) */
     int16_t ev_obj;
     uint32_t used[LEVEL_MAX_INTERACT / 32];
 } Player;
@@ -50,10 +38,23 @@ void sim_reset(Player *p, const Level *L);
 /* Advance one 1/60 s tick. held = button down this tick, pressed = went down this tick. */
 void sim_tick(Player *p, const Level *L, int held, int pressed);
 
-/* Player hitbox half extents for the current mode (outer box). */
-void sim_hitbox(const Player *p, float *hw, float *hh);
+/* A tick of the run past the finish line, t ticks after it: the player
+ * levels out and speeds off (SIM_EXIT_*). Nothing else happens. */
+void sim_coast(Player *p, uint16_t t);
+
+/* Has the player used up the interactable object id this attempt? */
+static inline int sim_used(const Player *p, int id) { return (p->used[id >> 5] >> (id & 31)) & 1u; }
+
+/* For drawing: the player in blocks and blocks per second. */
+#define SIM_FIX_TO_F (1.0f / 65536.0f)
+static inline float sim_x(const Player *p) { return (float)p->x * SIM_FIX_TO_F; }
+static inline float sim_y(const Player *p) { return (float)p->y * SIM_FIX_TO_F; }
+static inline float sim_vy(const Player *p) { return (float)p->vy * (SIM_SUBSTEPS * 60 * SIM_FIX_TO_F); }
+/* Speeds of the speed portals 0..3 in blocks per second. */
+extern const float SIM_SPEEDS[4];
+static inline float sim_speed(const Player *p) { return SIM_SPEEDS[p->speed_idx]; }
 
 /* Corridor height used by ship/ball/ufo/wave. */
-#define CORRIDOR_H 10.0f
+#define CORRIDOR_H ((float)SIM_CORRIDOR)
 
 #endif

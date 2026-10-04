@@ -9,7 +9,7 @@
 #
 # gbc_tool (src/host/gbc_tool.c, built by Makefile.host) turns the game's
 # levels, songs and font into the ROM's data in build/gbc/gen; the code is
-# in src/gbc.
+# in src/gbc, and the shared rules it uses in src/core (SHARED below).
 
 GBDK_HOME ?= $(if $(wildcard build/gbdk/bin/lcc),$(CURDIR)/build/gbdk,/opt/gbdk)
 LCC := $(GBDK_HOME)/bin/lcc
@@ -46,8 +46,16 @@ $(OUT)/gbsim.o: src/gbc/gbsim.c $(HDR) $(GEN)/stamp
 	@mkdir -p $(OUT)
 	$(LCC) $(LCCFLAGS) $(SIMFLAGS) -c -o $@ $<
 
-$(ROM): $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(HDR) $(GEN)/stamp
-	$(LCC) $(LCCFLAGS) -o $@ $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(GEN)/*.c
+# the game's rules shared with the other platforms (src/core, integer C),
+# in the menus' ROM bank
+SHARED := src/core/progress.c
+SHARED_OBJ := $(patsubst src/core/%.c,$(OUT)/%.o,$(SHARED))
+$(OUT)/%.o: src/core/%.c $(wildcard src/core/*.h)
+	@mkdir -p $(OUT)
+	$(LCC) $(LCCFLAGS) -Wf-bo15 -c -o $@ $<
+
+$(ROM): $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(SHARED_OBJ) $(HDR) $(GEN)/stamp
+	$(LCC) $(LCCFLAGS) -o $@ $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(SHARED_OBJ) $(GEN)/*.c
 	@echo "built: $@"
 
 clean:

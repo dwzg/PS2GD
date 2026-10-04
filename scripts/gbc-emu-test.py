@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """
 Run the Game Boy Color ROM in PyBoy, headless, and play levels with the
-solver's inputs (gbc_tool script): proves the ROM finishes each level in
-exactly as many ticks as the host build of the same physics says, and
-that every frame of it fits in the CPU's time (a late frame slows the
-game and its music down by a frame).
+solver's inputs (gbc_tool script): proves the ROM's player is where the
+reference physics (src/core/sim.c, gbc_tool replay) puts it on every tick
+of each level, and that every frame of it fits in the CPU's time (a late
+frame slows the game and its music down by a frame).
 
   scripts/gbc-emu-test.py [--levels 0,1,..] [--shots DIR] [--every N]
                           [--allow-late] [--perf] [--perf-csv FILE]
 
 needs: pip install pyboy (2.x), and build/gbc/pulsedash.gbc
 (scripts/build-gbc.sh), build/host/gbc_tool. Exits non-zero if a level
-isn't finished, finishes on another tick than the host's run, or (unless
---allow-late) had frames that took too long. --perf plays the PERF=1 build
+isn't finished, the player differs from the reference's on any tick, its
+results are drawn more than once, the screen goes white between screens
+(the LCD off), or (unless --allow-late) frames took too long. --perf plays
+the PERF=1 build
 (build/gbc-perf) instead and prints how many scanlines each part of a
 frame took (its timers make it slower: late frames are expected there).
 """
 import argparse
+import io
 import os
 import subprocess
 import sys
@@ -26,7 +29,7 @@ from pyboy import PyBoy
 ROM = "build/gbc/pulsedash.gbc"
 ROM_PERF = "build/gbc-perf/pulsedash.gbc"
 TOOL = "build/host/gbc_tool"
-SCR_TITLE, SCR_SELECT, SCR_PLAY = 1, 2, 3
+SCR_TITLE, SCR_SELECT, SCR_PLAY, SCR_GARAGE = 1, 2, 3, 4
 J_A = 0x10
 PH_RUN, PH_DEAD, PH_RESPAWN, PH_COMPLETE = 0, 1, 2, 3
 # the timings of a PERF=1 build (src/gbc/gbc.h, src/gbc/gbsim.c), in scanlines
@@ -35,7 +38,8 @@ PERF_SIM = ["physics", "x", "solids", "inner", "objects", "broad"]
 LINES_PER_FRAME = 154
 
 # GsPlayer (src/gbc/gbsim.h) as SDCC lays it out: no padding
-OFF_X, OFF_Y, OFF_MODE, OFF_DEAD, OFF_DONE, OFF_COINS, OFF_TICKS = 0, 6, 17, 21, 22, 23, 26
+OFF_X, OFF_Y, OFF_VY, OFF_GRAV, OFF_MODE, OFF_DEAD, OFF_DONE, OFF_COINS, OFF_TICKS, OFF_JUMPS = \
+    0, 6, 10, 16, 17, 21, 22, 23, 26, 28
 
 
 def symbols(noi):
@@ -45,6 +49,27 @@ def symbols(noi):
         if len(p) == 3 and p[0] == "DEF":
             sym[p[1]] = int(p[2], 16)
     return sym
+
+
+def gb_levels():
+    """the game's number of each level on the Game Boy (gbc_tool levels)"""
+    out = subprocess.run([TOOL, "levels"], check=True, capture_output=True, text=True).stdout
+    return [int(line.split()[1]) for line in out.split("\n") if line]
+
+
+def load_replay(level, script):
+    """the reference's player after each tick: {ticks: (x, y, vy, mode, grav)}"""
+    out = subprocess.run([TOOL, "replay", str(level), script], check=True, capture_output=True, text=True).stdout
+    ref = {}
+    for line in out.split("\n"):
+        if line:
+            t, x, y, vy, mode, grav = map(int, line.split()[:6])
+            ref[t] = (x, y, vy, mode, grav)
+    return ref
+
+
+def signed(v, bits):
+    return v - (1 << bits) if v >= 1 << (bits - 1) else v
 
 
 def load_script(path):
@@ -60,14 +85,32 @@ def load_script(path):
     return held, finish
 
 
+# SaveData (src/gbc/gbc.h) as SDCC lays it out: Progress (src/core/progress.h), then the garage
+SAVE_BEST, SAVE_BEST_PRACTICE, SAVE_COINS, SAVE_ATTEMPTS = 0, 16, 32, 48  # [16] each, attempts 32-bit
+SAVE_ICON, SAVE_COL1, SAVE_COL2 = 120, 121, 122
+ST_CUBE, CUBE_FRAMES = 128, 6  # src/gbc/gfx_ids.h
+SRAM_SIZE = 8192
+
+
+def save_v1(best, best_practice, coins, attempts):
+    """the cartridge RAM of the first version's save ("PDG1", six levels)"""
+    body = bytes(best) + bytes(best_practice) + bytes(coins) + b"".join(a.to_bytes(2, "little") for a in attempts)
+    s = 0x5A
+    for b in body:
+        s = ((s << 1 | s >> 7) & 0xFF) ^ b
+    return (b"PDG1" + body + bytes([s])).ljust(SRAM_SIZE, b"\0")
+
+
 class Game:
-    def __init__(self, rom):
-        self.pb = PyBoy(rom, window="null", cgb=True, sound_emulated=False)
+    def __init__(self, rom, sram=bytes(SRAM_SIZE)):
+        # the cartridge's RAM from sram, not from a file next to the ROM
+        self.pb = PyBoy(rom, window="null", cgb=True, sound_emulated=False, ram_file=io.BytesIO(sram))
         self.pb.set_emulation_speed(0)
         self.sym = symbols(os.path.splitext(rom)[0] + ".noi")
         self.m = self.pb.memory
         self.frames = 0
         self.selected = 0
+        self.lcd_off = 0  # frames the LCD was off (a Game Boy Color shows white)
 
     def u8(self, name, off=0):
         return self.m[self.sym[name] + off]
@@ -79,10 +122,27 @@ class Game:
     def u32(self, name, off=0):
         return self.u16(name, off) | self.u16(name, off + 2) << 16
 
+    def save(self, field, level, size=1):
+        """a field of g_save.progress for a level (by the game's number)"""
+        a = self.sym["_g_save"] + field + level * size
+        return sum(self.m[a + k] << (8 * k) for k in range(size))
+
+    def rom(self, name, off, n):
+        """n bytes of a symbol's data in its ROM bank"""
+        a = self.sym[name]
+        return [self.pb.memory[a >> 16, (a & 0xFFFF) + off + k] for k in range(n)]
+
+    def player(self):
+        """gs_p as the reference's replay prints it: x, y, vy, mode, grav"""
+        return (self.u32("_gs_p", OFF_X), signed(self.u32("_gs_p", OFF_Y), 32), signed(self.u16("_gs_p", OFF_VY), 16),
+                self.u8("_gs_p", OFF_MODE), signed(self.u8("_gs_p", OFF_GRAV), 8))
+
     def tick(self, n=1):
         for _ in range(n):
             self.pb.tick()
             self.frames += 1
+            if not self.m[0xFF40] & 0x80:
+                self.lcd_off += 1
 
     def press(self, button):
         self.pb.button_press(button)
@@ -132,7 +192,149 @@ class Perf:
         print("  frames over budget: %d" % over)
 
 
-def play_level(game, level, held, finish, shots, every, perf=None, allow_late=False, delay=0):
+UT_COIN_NO, UT_COIN_YES, UT_BAR = 67, 68, 72  # src/gbc/gfx_ids.h
+
+
+def card_coins(g):
+    """The level card's coins (3, background row 8) are the saved ones."""
+    g.tick(10)
+    saved = g.save(SAVE_COINS, 0)
+    shown = [g.pb.memory[0, 0x9800 + 8 * 32 + x] for x in (8, 10, 12)]
+    want = [UT_COIN_YES if saved >> i & 1 else UT_COIN_NO for i in range(3)]
+    return shown == want, "saved %s, shown %s" % (bin(saved), ["got" if t == UT_COIN_YES else "-" for t in shown])
+
+
+def migration(rom):
+    """A save of the first version is carried over (bests, coins, attempts),
+    and the level card shows its coins."""
+    best, practice = [47, 0, 0, 0, 0, 12], [82, 0, 0, 0, 0, 0]
+    coins, attempts = [0b101, 0, 0, 0, 0, 0b10], [300, 0, 0, 0, 0, 65535]
+    g = Game(rom, save_v1(best, practice, coins, attempts))
+    if not g.wait_screen(SCR_TITLE):
+        return False, "no title screen"
+    got = ([g.save(SAVE_BEST, i) for i in range(6)], [g.save(SAVE_BEST_PRACTICE, i) for i in range(6)],
+           [g.save(SAVE_COINS, i) for i in range(6)], [g.save(SAVE_ATTEMPTS, i, 4) for i in range(6)])
+    if got != (best, practice, coins, attempts):
+        return False, "carried over as %s" % (got,)
+    g.tick(30)
+    g.press("start")
+    g.wait_screen(SCR_SELECT)
+    ok, info = card_coins(g)
+    g.pb.stop(save=False)
+    return ok, "bests, coins and attempts kept; card " + info
+
+
+def title_demo(g, loops=4):
+    """The title's demo run loops its level on the beat of the menu song
+    without dying, every frame on time (its presses are the other
+    versions', checked by pd_tool demo)."""
+    g.tick(1029 * loops + 60)  # 180 blocks at 10.5 a second: 1028.6 frames a loop
+    n, deaths, late = g.u16("_g_demo_loops"), g.u16("_g_demo_deaths"), g.u16("_g_dropped")
+    return n >= loops and not deaths and not late, "%d loops, %d deaths, %d frames late" % (n, deaths, late)
+
+
+def garage(g):
+    """From the title to the garage: the icon and colours chosen there are
+    saved, and the player is drawn with them (its cube frames in VRAM, its
+    sprite palette)."""
+    g.press("right")
+    g.tick(4)
+    g.press("a")
+    if not g.wait_screen(SCR_GARAGE):
+        return False, "no garage"
+    g.tick(10)
+    for _ in range(3):  # icon 3
+        g.press("right")
+        g.tick(30)
+    g.press("down")
+    for _ in range(4):  # colour 1: 4
+        g.press("right")
+    g.press("down")
+    g.press("left")  # colour 2: 1 -> 0
+    g.press("b")
+    if not g.wait_screen(SCR_TITLE):
+        return False, "no title after the garage"
+    got = (g.save(SAVE_ICON, 0), g.save(SAVE_COL1, 0), g.save(SAVE_COL2, 0))
+    if got != (3, 4, 0):
+        return False, "saved icon and colours %s, not (3, 4, 0)" % (got,)
+    n = CUBE_FRAMES * 64
+    vram = [g.pb.memory[1, 0x8000 + ST_CUBE * 16 + k] for k in range(n)]
+    if vram != g.rom("_gfx_icons", 3 * n, n):
+        return False, "the cube's frames in VRAM aren't icon 3's"
+    pal = [g.u16("_g_objpal", 2 * k) for k in (1, 2)]
+
+    def rgb555(c):
+        r, gr, b = g.rom("_gbc_player_colors", 3 * c, 3)
+        return r | gr << 5 | b << 10
+    if pal != [rgb555(4), rgb555(0)]:
+        return False, "the player's palette is %s, not colours 4 and 0" % (pal,)
+    return True, "icon 3, colours 4 and 0: saved, in VRAM and the palette"
+
+
+def bar_after_restart(g, level_id):
+    """Die late in the first level: after the restart the progress bar (HUD
+    row, cells 3..14) shows the new percentage, every cell of it (a restart
+    changes more cells than a frame's cell queue holds)."""
+    script = os.path.join("build", "gbc", "script%d.txt" % level_id)
+    subprocess.run([TOOL, "script", str(level_id), script], check=True, stdout=subprocess.DEVNULL)
+    held, _ = load_script(script)
+
+    def percent():  # progress_percent (src/core/progress.c)
+        x = signed(g.u32("_gs_p", OFF_X), 32)
+        return 0 if x <= 0 else min(100, ((x >> 16) * 100 + ((x & 0xFFFF) * 100 >> 16)) // g.u16("_gs_width"))
+    crash = []
+
+    def on_input(_):
+        if not crash and percent() >= 80:
+            crash.append(1)
+        h = held.get(g.u16("_gs_p", OFF_TICKS), False)
+        g.m[g.sym["_g_test_keys"]] = J_A if h != bool(crash) else 0  # past 80%: the wrong buttons
+    g.tick(10)
+    g.press("a")
+    if not g.wait_screen(SCR_PLAY):
+        return False, "level did not start"
+    while g.u8("_g_phase") != PH_RUN:  # (it still says how the last run ended)
+        g.tick()
+    g.pb.hook_register(0, g.sym["_input_update"], on_input, None)
+    for _ in range(12000):
+        g.tick()
+        if g.u8("_g_phase") == PH_DEAD:
+            break
+    died = percent()
+    while g.u8("_g_phase") != PH_RUN:
+        g.tick()
+    g.tick(30)
+    g.pb.hook_deregister(0, g.sym["_input_update"])
+    g.m[g.sym["_g_test_keys"]] = 0xFF
+    fill = percent() * 123 >> 7
+    want = [max(0, min(8, fill - 8 * i)) for i in range(12)]
+    shown = [g.pb.memory[0, 0x9800 + 3 + i] - UT_BAR for i in range(12)]
+    g.press("start")
+    g.tick(5)
+    g.press("b")
+    g.wait_screen(SCR_SELECT)
+    return shown == want, "died at %d%%; restarted at %d%%, bar %s" % (died, percent(), "as it should be" if shown == want else
+                                                                     "shows %s, not %s" % (shown, want))
+
+
+def held_start(g):
+    """The A that starts a level, still held, doesn't jump; then quit it."""
+    g.tick(10)
+    g.pb.button_press("a")
+    if not g.wait_screen(SCR_PLAY):
+        return False
+    g.tick(40)
+    jumps = g.u16("_gs_p", OFF_JUMPS)
+    g.pb.button_release("a")
+    g.tick(2)
+    g.press("start")
+    g.tick(5)
+    g.press("b")
+    return g.wait_screen(SCR_SELECT) and jumps == 0
+
+
+def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, perf=None, allow_late=False, delay=0):
+    """level: its number on the Game Boy (the select screen's order), level_id: the game's"""
     g = game
     if not g.wait_screen(SCR_SELECT):
         return False, "no level select"
@@ -141,7 +343,7 @@ def play_level(game, level, held, finish, shots, every, perf=None, allow_late=Fa
     while g.selected != level:
         g.press("right")
         g.tick(20)  # the card is redrawn over a few frames
-        g.selected = (g.selected + 1) % 6
+        g.selected = (g.selected + 1) % nlevels
     g.tick(delay)
     g.press("a")
     if not g.wait_screen(SCR_PLAY):
@@ -149,6 +351,7 @@ def play_level(game, level, held, finish, shots, every, perf=None, allow_late=Fa
     # the buttons for each tick, put in place when the game reads the pad
     # for it (a frame's work can run past the emulator's frame boundary)
     late = []
+    differs = []
 
     def on_input(_):
         if perf is not None and g.u8("_g_phase") == PH_RUN:
@@ -156,6 +359,9 @@ def play_level(game, level, held, finish, shots, every, perf=None, allow_late=Fa
         t = g.u16("_gs_p", OFF_TICKS)
         if g.u16("_g_dropped") > len(late):
             late.append(t)
+        if t in ref and not differs and g.player() != ref[t]:
+            differs.append("after tick %d the ROM has x, y, vy, mode, gravity %s, the reference %s" %
+                           (t, g.player(), ref[t]))
         g.m[g.sym["_g_test_keys"]] = J_A if held.get(t, False) else 0
 
     g.pb.hook_register(0, g.sym["_input_update"], on_input, None)
@@ -177,21 +383,37 @@ def play_level(game, level, held, finish, shots, every, perf=None, allow_late=Fa
         return False, "died at tick %d, x=%.2f" % (ticks, x)
     if not g.u8("_g_snap", OFF_DONE):
         return False, "not finished after %d ticks" % ticks
-    info = "finished in %d ticks (host: %d), %d frames took too long" % (ticks, finish, g.u16("_g_dropped"))
+    # what the finish counted for (src/core/progress.c on the Game Boy)
+    run_coins = g.u8("_g_snap", OFF_COINS)
+    saved = (g.save(SAVE_BEST, level_id), g.save(SAVE_COINS, level_id), g.save(SAVE_ATTEMPTS, level_id, 4))
+    save_ok = saved[0] == 100 and saved[1] & run_coins == run_coins and saved[2] >= 1
+    info = "finished in %d ticks (reference: %d), %d frames took too long" % (ticks, finish, g.u16("_g_dropped"))
     if late:
         info += " (ticks %s%s)" % (" ".join(map(str, late[:12])), " ..." if len(late) > 12 else "")
-    # the results come up after a moment
+    info += "; " + (differs[0] if differs else "the same as the reference on every tick")
+    if not save_ok:
+        info += "; SAVED best %d%%, coins %s (the run's %s), attempts %d" % (saved[0], bin(saved[1]), bin(run_coins),
+                                                                            saved[2])
+    # the results come up after a moment, drawn once (the fireworks go on
+    # round every 256 frames)
+    results = []
+    a = g.sym["_ui_results"]
+    g.pb.hook_register(a >> 16, a & 0xFFFF, lambda _: results.append(1), None)
     g.tick(100)
     if shots:
         g.shot(os.path.join(shots, "level%d_complete.png" % level))
+    g.tick(240)
+    g.pb.hook_deregister(a >> 16, a & 0xFFFF)
+    if len(results) != 1:
+        info += "; RESULTS DRAWN %d TIMES" % len(results)
     g.press("a")
     g.wait_screen(SCR_SELECT)
-    return ticks == finish and (allow_late or not late), info
+    return ticks == finish and not differs and save_ok and len(results) == 1 and (allow_late or not late), info
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--levels", default="0,1,2,3,4,5")
+    ap.add_argument("--levels", default="", help="the levels to play, by their number on the Game Boy (default: all)")
     ap.add_argument("--shots", default="")
     ap.add_argument("--every", type=int, default=0, help="screenshot every N ticks")
     ap.add_argument("--allow-late", action="store_true", help="don't fail on frames that took too long")
@@ -206,26 +428,54 @@ def main():
     if not game.wait_screen(SCR_TITLE):
         print("FAIL: no title screen")
         return 1
-    game.tick(30)
+    fails = 0
+    while not game.m[0xFF40] & 0x80:  # (it starts off, and the title is set up before it comes on)
+        game.tick()
+    game.lcd_off = 0
+    ok, info = title_demo(game)
+    print("title's demo run: %s (%s)" % ("ok" if ok else "FAIL", info))
+    fails += not ok
     if args.shots:
         game.shot(os.path.join(args.shots, "title.png"))
+    ok, info = garage(game)
+    print("garage: %s (%s)" % ("ok" if ok else "FAIL", info))
+    fails += not ok
+    game.tick(30)
     game.press("start")
     game.wait_screen(SCR_SELECT)
-    fails = 0
-    for level in map(int, args.levels.split(",")):
-        script = os.path.join("build", "gbc", "script%d.txt" % level)
-        subprocess.run([TOOL, "script", str(level), script], check=True, stdout=subprocess.DEVNULL)
+    ids = gb_levels()
+    ok, info = card_coins(game)
+    print("level card coins: %s (%s)" % ("ok" if ok else "FAIL", info))
+    fails += not ok
+    ok, info = migration(ROM_PERF if args.perf else ROM)
+    print("a first version's save: %s (%s)" % ("ok" if ok else "FAIL", info))
+    fails += not ok
+    ok = held_start(game)
+    print("A held from the level select: %s" % ("no jump" if ok else "FAIL, the cube jumped"))
+    fails += not ok
+    ok, info = bar_after_restart(game, ids[0])
+    print("progress bar after a restart: %s (%s)" % ("ok" if ok else "FAIL", info))
+    fails += not ok
+    for level in map(int, args.levels.split(",")) if args.levels else range(len(ids)):
+        script = os.path.join("build", "gbc", "script%d.txt" % ids[level])
+        subprocess.run([TOOL, "script", str(ids[level]), script], check=True, stdout=subprocess.DEVNULL)
         held, finish = load_script(script)
+        ref = load_replay(ids[level], script)
         if args.shots:
             game.tick(10)
             game.shot(os.path.join(args.shots, "select%d.png" % level))
         perf = Perf() if args.perf else None
-        ok, info = play_level(game, level, held, finish, args.shots, args.every, perf, args.allow_late or args.perf, args.delay)
-        print("level %d: %s %s" % (level, "ok" if ok else "FAIL", info))
+        ok, info = play_level(game, level, ids[level], len(ids), held, finish, ref, args.shots, args.every, perf,
+                              args.allow_late or args.perf, args.delay)
+        print("level %d: %s %s" % (ids[level], "ok" if ok else "FAIL", info))
         if perf:
             perf.report(level, args.perf_csv)
         sys.stdout.flush()
         fails += not ok
+    # screens change in black, the LCD on: off, a Game Boy Color's is white
+    print("screen changes: %s" % ("black, the LCD on throughout" if not game.lcd_off else
+                                  "FAIL, the LCD was off (white) for %d frames" % game.lcd_off))
+    fails += game.lcd_off > 0
     print("all levels finished in the ROM" if not fails else "SOME LEVELS FAILED IN THE ROM")
     return 1 if fails else 0
 
