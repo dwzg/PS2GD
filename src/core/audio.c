@@ -63,11 +63,7 @@ static const InstDef INST[INS_COUNT] = {
 /* Compiled songs                                                      */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint32_t step;
-    uint16_t len;
-    uint8_t track, note, vel;
-} SeqEvent;
+typedef AudioNote SeqEvent;
 
 typedef struct {
     SeqEvent *ev;
@@ -1110,4 +1106,13 @@ int audio_song_bars(int song)
 {
     if (song < 0 || song >= s_ncs) return 0;
     return (int)(s_cs[song].len_steps / 16);
+}
+
+int audio_song_notes(int song, const AudioNote **notes, uint32_t *len_steps, uint32_t *loop_step)
+{
+    if (song < 0 || song >= s_ncs) return 0;
+    *notes = s_cs[song].ev;
+    *len_steps = s_cs[song].len_steps;
+    *loop_step = s_cs[song].loop_step;
+    return s_cs[song].nev;
 }

@@ -8,6 +8,8 @@
 #                                       build/host-psp/ (to try it on a PC)
 #   make -f Makefile.host PSP=1 psp-art  -> redraw the PSP's XMB icon and background
 #                                       (src/psp/ICON0.PNG, PIC1.PNG)
+#   make -f Makefile.host build/host/gbc_tool  -> the Game Boy Color data tool
+#                                       (Makefile.gbc builds and uses it)
 
 CC ?= cc
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -27,6 +29,8 @@ CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/levels/*.c)
 CORE_OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC))
 GAME_OBJ := $(OUT)/host/main_sdl.o $(OUT)/host/gfx_sdl.o
 TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o
+GBC_TOOL_OBJ := $(OUT)/host/gbc_tool.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o \
+                $(OUT)/gbc/gbsim.o $(OUT)/gbc/gbcells.o $(OUT)/gbc/tileset.o
 
 all: $(OUT)/pulsedash $(OUT)/pd_tool
 
@@ -36,6 +40,9 @@ $(OUT)/pulsedash: $(CORE_OBJ) $(GAME_OBJ)
 $(OUT)/pd_tool: $(CORE_OBJ) $(TOOL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+$(OUT)/gbc_tool: $(CORE_OBJ) $(GBC_TOOL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 $(OUT)/host/%.o: CFLAGS += -Wno-double-promotion
 
 # the version is compiled into one small object, rebuilt every time
@@ -43,7 +50,7 @@ $(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
 $(OUT)/core/version.o: FORCE
 FORCE:
 
-$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h)
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

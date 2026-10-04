@@ -21,6 +21,10 @@ enum { ALIGN_LEFT = 0, ALIGN_CENTER = 1, ALIGN_RIGHT = 2 };
 
 void font_init(void);
 
+/* Tool helper: the 5x7 bitmap of a glyph, a byte per row (bit 4 is the
+ * left column). Returns 0 if the font has no such glyph. */
+int font_glyph(char c, uint8_t rows[7]);
+
 /* Size of one font pixel at a scale: on the pixel grid, the nearest whole
  * number of screen pixels (at least one). */
 float font_pixel(float scale);

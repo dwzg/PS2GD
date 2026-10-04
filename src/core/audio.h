@@ -64,4 +64,15 @@ float audio_song_length(int song);
 int audio_pattern_steps(const char *data, int drum);
 int audio_song_bars(int song);
 
+/* Tool helper: a song's notes as the sequencer plays them, sorted by step
+ * (16th notes from the start of the arrangement). A drum note holds its
+ * pattern character ('x', 'X', 'c', 'o', 'r'). Returns the number of
+ * notes; the arrangement's length and loop point are in steps. */
+typedef struct {
+    uint32_t step;
+    uint16_t len; /* steps */
+    uint8_t track, note, vel;
+} AudioNote;
+int audio_song_notes(int song, const AudioNote **notes, uint32_t *len_steps, uint32_t *loop_step);
+
 #endif
