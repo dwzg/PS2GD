@@ -1,5 +1,6 @@
-# Game Boy Color build (requires GBDK-2020 4.1.x: GBDK_HOME, and the host
-# tools' dependencies, for gbc_tool).
+# Game Boy Color build (requires GBDK-2020 4.1.x: GBDK_HOME, default
+# build/gbdk as scripts/build-gbc.sh makes it, and the host tools'
+# dependencies, for gbc_tool).
 #   make -f Makefile.gbc                 -> build/gbc/pulsedash.gbc
 #   make -f Makefile.gbc PERF=1          -> build/gbc-perf/pulsedash.gbc, timing the parts of
 #                                           each frame for scripts/gbc-emu-test.py --perf
@@ -10,7 +11,7 @@
 # levels, songs and font into the ROM's data in build/gbc/gen; the code is
 # in src/gbc.
 
-GBDK_HOME ?= /opt/gbdk
+GBDK_HOME ?= $(if $(wildcard build/gbdk/bin/lcc),$(CURDIR)/build/gbdk,/opt/gbdk)
 LCC := $(GBDK_HOME)/bin/lcc
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 

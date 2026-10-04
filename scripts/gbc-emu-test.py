@@ -3,14 +3,18 @@
 Run the Game Boy Color ROM in PyBoy, headless, and play levels with the
 solver's inputs (gbc_tool script): proves the ROM finishes each level in
 exactly as many ticks as the host build of the same physics says, and
-reports frames the ROM could not finish in time.
+that every frame of it fits in the CPU's time (a late frame slows the
+game and its music down by a frame).
 
-  scripts/gbc-emu-test.py [--levels 0,1,..] [--shots DIR] [--every N] [--perf]
+  scripts/gbc-emu-test.py [--levels 0,1,..] [--shots DIR] [--every N]
+                          [--allow-late] [--perf] [--perf-csv FILE]
 
-needs: pip install pyboy (2.x), and build/gbc/pulsedash.gbc (make -f
-Makefile.gbc), build/host/gbc_tool. --perf plays the PERF=1 build
-(build/gbc-perf) and prints how many scanlines each part of a frame took. Exits non-zero if a level isn't
-finished, or finishes on another tick than the host's run.
+needs: pip install pyboy (2.x), and build/gbc/pulsedash.gbc
+(scripts/build-gbc.sh), build/host/gbc_tool. Exits non-zero if a level
+isn't finished, finishes on another tick than the host's run, or (unless
+--allow-late) had frames that took too long. --perf plays the PERF=1 build
+(build/gbc-perf) instead and prints how many scanlines each part of a
+frame took (its timers make it slower: late frames are expected there).
 """
 import argparse
 import os
@@ -128,7 +132,7 @@ class Perf:
         print("  frames over budget: %d" % over)
 
 
-def play_level(game, level, held, finish, shots, every, perf=None):
+def play_level(game, level, held, finish, shots, every, perf=None, allow_late=False, delay=0):
     g = game
     if not g.wait_screen(SCR_SELECT):
         return False, "no level select"
@@ -138,6 +142,7 @@ def play_level(game, level, held, finish, shots, every, perf=None):
         g.press("right")
         g.tick(20)  # the card is redrawn over a few frames
         g.selected = (g.selected + 1) % 6
+    g.tick(delay)
     g.press("a")
     if not g.wait_screen(SCR_PLAY):
         return False, "level did not start"
@@ -181,7 +186,7 @@ def play_level(game, level, held, finish, shots, every, perf=None):
         g.shot(os.path.join(shots, "level%d_complete.png" % level))
     g.press("a")
     g.wait_screen(SCR_SELECT)
-    return ticks == finish, info
+    return ticks == finish and (allow_late or not late), info
 
 
 def main():
@@ -189,6 +194,9 @@ def main():
     ap.add_argument("--levels", default="0,1,2,3,4,5")
     ap.add_argument("--shots", default="")
     ap.add_argument("--every", type=int, default=0, help="screenshot every N ticks")
+    ap.add_argument("--allow-late", action="store_true", help="don't fail on frames that took too long")
+    ap.add_argument("--delay", type=int, default=0,
+                    help="frames to wait before starting each level (shifts work done every other or fourth frame)")
     ap.add_argument("--perf", action="store_true", help="time the frames (the PERF=1 build)")
     ap.add_argument("--perf-csv", default="", help="with --perf: every frame's timings to this file (%%d: level)")
     args = ap.parse_args()
@@ -212,7 +220,7 @@ def main():
             game.tick(10)
             game.shot(os.path.join(args.shots, "select%d.png" % level))
         perf = Perf() if args.perf else None
-        ok, info = play_level(game, level, held, finish, args.shots, args.every, perf)
+        ok, info = play_level(game, level, held, finish, args.shots, args.every, perf, args.allow_late or args.perf, args.delay)
         print("level %d: %s %s" % (level, "ok" if ok else "FAIL", info))
         if perf:
             perf.report(level, args.perf_csv)

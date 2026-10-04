@@ -49,7 +49,7 @@ static uint16_t s_attempts, s_jumps_total;
 static uint32_t s_ticks_total;
 static int16_t s_cam, s_col;
 static uint8_t s_trig, s_pal_from, s_pal_to, s_pal_t;
-static uint8_t s_flash, s_fade, s_pal_dirty;
+static uint8_t s_flash, s_fade, s_pal_dirty, s_beat;
 static uint16_t s_rot;
 static int8_t s_ship_f;
 static Snap s_cp[MAX_CP];
@@ -118,7 +118,8 @@ static void build_column(int16_t c, uint8_t *t, uint8_t *a)
 static void stream(uint8_t max)
 {
     uint8_t t[COL_ROWS], a[COL_ROWS];
-    int16_t want = col_of(s_cam) + 21;
+    /* (a column ahead of the screen's last: drawing can wait a frame) */
+    int16_t want = col_of(s_cam) + 22;
     while (s_col <= want && max && col_queue_free()) {
         build_column(s_col, t, a);
         col_queue((uint8_t)(s_col & 31), t, a);
@@ -190,13 +191,14 @@ static void palettes(void)
         s_pal_t += 2;
         s_pal_dirty = 1;
     }
-    if (music_beat && g_phase == PH_RUN) {
+    if (s_beat && g_phase == PH_RUN) {
         s_flash = 9;
         s_pal_dirty = 1;
     } else if (s_flash && (g_frame & 1)) {
         s_flash--;
         s_pal_dirty = 1;
     }
+    s_beat = 0;
     if (s_pal_dirty) {
         pal_level(s_pal_from, s_pal_to, SMOOTH[s_pal_t], s_flash, s_fade);
         s_pal_dirty = 0;
@@ -507,16 +509,27 @@ static void run_tick(void)
     else if (gs_p.done) on_complete();
 }
 
+/* Scanlines since this frame's vertical blank began (255: the next one
+ * has begun already). */
+static uint8_t frame_lines(void)
+{
+    uint8_t ly = LY_REG;
+    if (g_vbl_count != s_vbl_start) return 255;
+    return ly >= 144 ? (uint8_t)(ly - 144) : (uint8_t)(ly + 10);
+}
+
 static void play_frame(void)
 {
+    s_beat |= music_beat; /* for palettes(), which may run a frame later */
     if (s_paused) {
-        if (g_pressed & J_A) {
+        if (g_pressed & (J_A | J_SELECT | J_B)) {
             s_paused = 0;
             HIDE_WIN;
+            SHOW_SPRITES;
+        }
+        if (g_pressed & J_A) {
             music_pause(0);
         } else if (g_pressed & J_SELECT) {
-            s_paused = 0;
-            HIDE_WIN;
             s_ncp = 0;
             s_attempts = 0;
             s_ticks_total = 0;
@@ -525,8 +538,6 @@ static void play_frame(void)
             s_t = 0;
             music_pause(0);
         } else if (g_pressed & J_B) {
-            s_paused = 0;
-            HIDE_WIN;
             if (g_phase == PH_RUN && gs_p.ticks > 30) {
                 gs_p.dead = 1;
                 on_death();
@@ -539,6 +550,7 @@ static void play_frame(void)
         s_paused = 1;
         music_pause(1);
         sfx_play(SFX_SELECT);
+        HIDE_SPRITES; /* they would cover the menu */
         ui_pause(s_practice);
         return;
     }
@@ -567,7 +579,8 @@ static void play_frame(void)
                 restore(s_practice && s_ncp ? &s_cp[s_ncp - 1] : &s_start);
             }
         } else if (s_t == 15) {
-            ui_attempt(s_attempts);
+            /* the attempt is written at the start of the level */
+            if (!(s_practice && s_ncp)) ui_attempt(s_attempts);
         } else if (s_t > 15) {
             s_fade = (uint8_t)(s_t - 15);
             s_pal_dirty = 1;
@@ -597,20 +610,6 @@ static void play_frame(void)
 
     if (g_phase == PH_RUN) s_cam = px_of(gs_p.x) - PLAYER_SX;
     g_scx = (uint8_t)s_cam;
-    {
-#ifdef PD_PERF
-        uint16_t t;
-#endif
-        PERF_BEGIN(t);
-        stream(g_phase == PH_RESPAWN ? 4 : 2);
-        PERF_END(PERF_STREAM, t);
-        PERF_BEGIN(t);
-        if (g_phase == PH_RUN || g_phase == PH_COMPLETE) hud_update();
-        PERF_END(PERF_HUD, t);
-        PERF_BEGIN(t);
-        palettes();
-        PERF_END(PERF_PAL, t);
-    }
     if ((g_frame & 3) == 0) saw_frame((uint8_t)((g_frame >> 2) & 3));
     {
 #ifdef PD_PERF
@@ -622,6 +621,25 @@ static void play_frame(void)
         draw_effects();
         if (s_practice) draw_checkpoints();
         PERF_END(PERF_SPRITES, t);
+    }
+    /* Then what can wait a frame if this one is short of time (a frame
+     * that runs late slows the game and its music down): the columns
+     * coming into view, the progress bar and the palettes, each only if
+     * its longest run (about 14, 20 and 31 scanlines) still fits. */
+    {
+#ifdef PD_PERF
+        uint16_t t;
+#endif
+        PERF_BEGIN(t);
+        if (g_phase == PH_RESPAWN) stream(4);
+        else if (frame_lines() < 154 - 20) stream(2);
+        PERF_END(PERF_STREAM, t);
+        PERF_BEGIN(t);
+        if ((g_phase == PH_RUN || g_phase == PH_COMPLETE) && frame_lines() < 154 - 26) hud_update();
+        PERF_END(PERF_HUD, t);
+        PERF_BEGIN(t);
+        if (frame_lines() < 154 - 37) palettes();
+        PERF_END(PERF_PAL, t);
     }
 }
 
@@ -658,7 +676,7 @@ void play_level(uint8_t level, uint8_t practice)
     /* draw the screen while the display is off */
     {
         uint8_t t[COL_ROWS], a[COL_ROWS], i;
-        for (i = 0; i < 22; i++) {
+        for (i = 0; i < 23; i++) {
             build_column(s_col, t, a);
             col_queue((uint8_t)(s_col & 31), t, a);
             s_col++;
@@ -692,10 +710,11 @@ void play_level(uint8_t level, uint8_t practice)
         if ((uint8_t)(g_vbl_count - s_vbl_start) > 1 && g_phase == PH_RUN && !s_paused) g_dropped++;
         s_vbl_start = g_vbl_count;
         PERF_BEGIN(t);
-        play_frame();
+        /* the music first: it must not wait */
         PERF_BEGIN(tm);
         music_tick();
         PERF_END(PERF_MUSIC, tm);
+        play_frame();
         PERF_END(PERF_FRAME, t);
     }
     music_stop();

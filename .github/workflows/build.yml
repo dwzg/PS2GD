@@ -1,8 +1,10 @@
 name: build
 
 # Every push and pull request: build the PS2 ELF and the PSP EBOOT and run
-# the level tests. Pushing a version tag (v1.2.0, or v1.3.0-rc1 for a
-# pre-release) also publishes a GitHub release with both once all jobs pass.
+# the level tests; build the Game Boy Color demo ROM and play its levels in
+# an emulator. Pushing a version tag (v1.2.0, or v1.3.0-rc1 for a
+# pre-release) also publishes a GitHub release with the PS2 and PSP builds
+# once their jobs pass.
 on:
   push:
     branches: ['**']
@@ -71,6 +73,38 @@ jobs:
           make -f Makefile.host PSP=1 -j"$(nproc)"
           build/host-psp/pd_tool smoke
           build/host-psp/pd_tool demo
+
+  gbc:
+    name: Game Boy Color ROM and emulator test
+    runs-on: ubuntu-24.04 # its SDCC, 4.2.0, is the one the ROM's timing was measured with
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the version shown on the title screen
+      - name: Install SDCC and SDL2
+        run: sudo apt-get update && sudo apt-get install -y sdcc libsdl2-dev
+      - name: Cache GBDK-2020
+        uses: actions/cache@v4
+        with:
+          path: build/gbdk
+          key: gbdk-${{ runner.os }}-${{ hashFiles('scripts/build-gbc.sh') }}
+      - name: Build (GBDK-2020 from source unless cached, then the ROM)
+        run: scripts/build-gbc.sh
+      - name: Check the levels on the Game Boy's physics (solver, on-beat presses)
+        run: |
+          build/host/gbc_tool solve
+          build/host/gbc_tool rhythm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Play every level in an emulator (PyBoy), each frame on time
+        run: |
+          pip install pyboy==2.7.0
+          python scripts/gbc-emu-test.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulsedash-gbc
+          path: build/gbc/pulsedash.gbc
 
   release:
     name: GitHub release
