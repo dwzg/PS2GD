@@ -7,6 +7,22 @@ section from this file as release notes.
 
 ## [Unreleased]
 
+### Added
+
+- A Game Boy Color demo (`pulsedash.gbc`, built by `scripts/build-gbc.sh`
+  with GBDK-2020, and by CI as the `pulsedash-gbc` artifact): all six
+  levels with every vehicle, orb, pad and portal, coins, practice mode with
+  checkpoints, each level's song arranged for the four sound channels,
+  palette changes with the beat flash, title and level select, and saves
+  in the cartridge's battery RAM, at the Game Boy's full frame rate. The
+  physics is a fixed-point port of the game's, exact to the tick; see
+  [docs/GBC_PORT.md](docs/GBC_PORT.md) for what the platform allows.
+- `gbc_tool` makes the ROM's data from the game's levels, songs, font and
+  colours, and checks every level with the Game Boy's physics (`solve`,
+  `rhythm`); `scripts/gbc-emu-test.py` plays all six levels in the ROM in
+  PyBoy, failing unless each ends on the same tick as on the PC and no
+  frame runs late.
+
 ## [1.1.0] - 2026-10-04
 
 ### Added

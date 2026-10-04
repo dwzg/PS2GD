@@ -25,6 +25,12 @@ loaded from the console's BIOS when available.
 
 The game uses no GPL code.
 
+## In the Game Boy Color demo (`pulsedash.gbc`)
+
+| Component | Used for | License |
+|-----------|----------|---------|
+| [GBDK-2020](https://github.com/gbdk-2020/gbdk-2020) library (gbdk-lib) and the SDCC runtime library | start-up code, interrupt handlers, video, joypad and bank switching helpers, arithmetic and memory routines | GPL 2.0 or later with the linking exception (the ROM may be distributed under any terms) |
+
 ## In the PC build
 
 | Component | Used for | License |
@@ -36,15 +42,17 @@ The game uses no GPL code.
 | Component | Used for | License |
 |-----------|----------|---------|
 | [Play!](https://github.com/jpd002/Play-) | emulator core in `tools/play-harness` (fetched at build time; the harness itself is adapted from Play!'s AutoTest, see [its LICENSE](tools/play-harness/LICENSE)) | BSD 2-Clause |
+| [GBDK-2020](https://github.com/gbdk-2020/gbdk-2020) and [SDCC](https://sdcc.sourceforge.net/) | compiler, assembler and linker of the Game Boy Color demo (`scripts/build-gbc.sh` builds GBDK-2020 from source) | GPL 2.0 or later; GBDK-2020's tools: zlib, MIT or public domain |
+| [PyBoy](https://github.com/Baekalfen/PyBoy) | Game Boy emulator that `scripts/gbc-emu-test.py` runs the ROM in (installed with pip) | LGPL 3.0 |
 | [PPSSPP](https://github.com/hrydgard/ppsspp) | PSP emulator that `scripts/psp-emu-test.sh` fetches and builds with the hooks in `tools/ppsspp-harness` (those are this project's own code, under MIT; the test runner built from them is GPL) | GPL 2.0 or later |
 
 ## Trademarks
 
 Pulse Dash is an independent, unofficial fan project. It is not affiliated
-with, endorsed or sponsored by RobTop Games or Sony Interactive
-Entertainment. "Geometry Dash" is a trademark of RobTop Games;
+with, endorsed or sponsored by RobTop Games, Sony Interactive
+Entertainment or Nintendo. "Geometry Dash" is a trademark of RobTop Games;
 "PlayStation", "PS2" and "PSP" are trademarks of Sony Interactive
-Entertainment.
+Entertainment; "Game Boy" and "Game Boy Color" are trademarks of Nintendo.
 These names are used only to describe what the game is inspired by and
 what it runs on. The MIT license covers this project's own work and grants
 no rights to anyone's trademarks.
