@@ -102,6 +102,14 @@ static unsigned char norm_char(char c)
     return ch;
 }
 
+int font_glyph(char c, uint8_t rows[7])
+{
+    unsigned char ch = norm_char(c);
+    if (ch >= 128 || !s_has[ch]) return 0;
+    memcpy(rows, s_glyph[ch], 7);
+    return 1;
+}
+
 /* On a pixel grid (draw.h) font pixels are whole device pixels, the nearest
  * whole number to their size, and text starts on a device pixel; otherwise
  * small text would come out with strokes of uneven width. */

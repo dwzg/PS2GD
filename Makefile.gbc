@@ -1,0 +1,57 @@
+# Game Boy Color build (requires GBDK-2020 4.1.x: GBDK_HOME, default
+# build/gbdk as scripts/build-gbc.sh makes it, and the host tools'
+# dependencies, for gbc_tool).
+#   make -f Makefile.gbc                 -> build/gbc/pulsedash.gbc
+#   make -f Makefile.gbc PERF=1          -> build/gbc-perf/pulsedash.gbc, timing the parts of
+#                                           each frame for scripts/gbc-emu-test.py --perf
+#   make -f Makefile.gbc VERSION=v1.2.0  -> version shown on the title screen
+#   ./scripts/build-gbc.sh               builds GBDK-2020 first if needed
+#
+# gbc_tool (src/host/gbc_tool.c, built by Makefile.host) turns the game's
+# levels, songs and font into the ROM's data in build/gbc/gen; the code is
+# in src/gbc.
+
+GBDK_HOME ?= $(if $(wildcard build/gbdk/bin/lcc),$(CURDIR)/build/gbdk,/opt/gbdk)
+LCC := $(GBDK_HOME)/bin/lcc
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+OUT := build/gbc$(if $(filter 1,$(PERF)),-perf)
+GEN := build/gbc/gen
+ROM := $(OUT)/pulsedash.gbc
+TOOL := build/host/gbc_tool
+
+SRC := $(wildcard src/gbc/*.c)
+HDR := $(wildcard src/gbc/*.h)
+# what gbc_tool reads
+DATA_SRC := $(wildcard src/levels/*.c) src/core/songs.c src/core/theme.c src/core/font.c src/host/gbc_tool.c
+
+# MBC5 with battery-backed RAM (0x1b), 16 ROM banks, 1 RAM bank, Game Boy Color only
+LCCFLAGS := -Isrc/gbc -I$(GEN) -Wm-yC -Wm-yt0x1B -Wm-yo16 -Wm-ya1 -Wm-yn"PULSE DASH" -Wl-m -Wl-j \
+            $(if $(filter 1,$(PERF)),-DPD_PERF -DGS_PERF)
+
+all: $(ROM)
+
+$(TOOL): FORCE
+	$(MAKE) -f Makefile.host $(TOOL)
+
+$(GEN)/stamp: $(TOOL) $(DATA_SRC) $(HDR)
+	@rm -rf $(GEN)
+	@mkdir -p $(GEN)
+	$(TOOL) export $(GEN) "$(VERSION)"
+	@touch $@
+
+# the physics runs four times a tick: compiled for speed, with more effort
+SIMFLAGS ?= -Wf--opt-code-speed -Wf--max-allocs-per-node50000
+$(OUT)/gbsim.o: src/gbc/gbsim.c $(HDR) $(GEN)/stamp
+	@mkdir -p $(OUT)
+	$(LCC) $(LCCFLAGS) $(SIMFLAGS) -c -o $@ $<
+
+$(ROM): $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(HDR) $(GEN)/stamp
+	$(LCC) $(LCCFLAGS) -o $@ $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(GEN)/*.c
+	@echo "built: $@"
+
+clean:
+	rm -rf build/gbc build/gbc-perf
+
+.PHONY: all clean FORCE
+FORCE:
