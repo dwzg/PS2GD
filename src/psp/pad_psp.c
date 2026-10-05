@@ -3,7 +3,12 @@
 
 #include "psp_platform.h"
 
+/* the HOME dialog goes away once the bit has been clear for this many reads
+ * (a bit that drops out for a frame doesn't let the game go on for one) */
+#define HOME_CLEAR_READS 3
+
 static int s_nub_armed; /* see stick_dpad() */
+static int s_home, s_home_clear; /* see pad_psp_home() */
 
 void pad_psp_init(void)
 {
@@ -15,6 +20,13 @@ uint32_t pad_psp_read(void)
 {
     SceCtrlData d;
     if (sceCtrlPeekBufferPositive(&d, 1) <= 0) return 0;
+    /* in user mode the HOME bit is set while the system's HOME dialog is up */
+    if (d.Buttons & PSP_CTRL_HOME) {
+        s_home = 1;
+        s_home_clear = 0;
+    } else if (s_home && ++s_home_clear >= HOME_CLEAR_READS) {
+        s_home = 0;
+    }
     static const struct {
         unsigned psp;
         uint32_t btn;
@@ -28,4 +40,9 @@ uint32_t pad_psp_read(void)
     for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
         if (d.Buttons & map[i].psp) b |= map[i].btn;
     return b | stick_dpad(d.Lx, d.Ly, &s_nub_armed);
+}
+
+int pad_psp_home(void)
+{
+    return s_home;
 }

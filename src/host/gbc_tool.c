@@ -375,48 +375,52 @@ static void make_block(Tile *t, int edges, int y0, int y1)
         }
 }
 
-typedef struct {
-    double angle;
-} SawCtx;
-
-static int shade_saw(double x, double y, const void *ctx)
+/*
+ * The small saw, turned by angle, by its pixels' middles: an 8x8 tile has
+ * no room for teeth beyond the disc (drawn so, a tooth was a bump of a
+ * pixel that came and went with the turn, and the saw an oval ring). So
+ * the disc's rim is the edge's colour all round, as render_saw's outline,
+ * and what turns is inside it, a ring dashed by the 6 teeth (the edge's
+ * colour where a tooth is, the fill's between), round the edge's dot.
+ */
+static void saw_tile(Tile *t, double angle)
 {
-    const SawCtx *s = (const SawCtx *)ctx;
-    double dx = x - 4.0, dy = y - 4.0, r = sqrt(dx * dx + dy * dy);
-    double a = atan2(dy, dx) - s->angle;
-    double ph = a * 6.0 / (2.0 * PI);
-    ph -= floor(ph);
-    double tooth = ph < 0.5 ? ph * 2.0 : (1.0 - ph) * 2.0; /* 0..1 sawtooth bumps */
-    double R = 2.9 + 0.95 * tooth;
-    if (r > R) return 0;
-    if (r < 1.0) return 2;
-    if (r > R - 0.85) return 2;
-    return 3;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) {
+            double dx = x + 0.5 - 4.0, dy = y + 0.5 - 4.0, r = sqrt(dx * dx + dy * dy);
+            double ph = (atan2(dy, dx) - angle) * 6.0 / (2.0 * PI);
+            ph -= floor(ph);
+            t->p[y][x] = r > 3.8 ? 0 : r > 2.8 || r < 0.8 ? 2 : fabs(r - 1.85) < 0.5 && ph < 0.5 ? 2 : 3;
+        }
 }
 
 typedef struct {
-    int col, kind;
+    int col;
 } PortalCtx;
+
+/*
+ * A speed portal's 1..4 chevrons into its 8x24 canvas: render.c's (0.62
+ * of a block from the middle to a tip, 5 rows here, a pixel to the side
+ * for each two), a pixel wide and 2 apart, every other one white (in one
+ * colour, 2 pixels apart, they ran together); four are 9 pixels across,
+ * the first one's outer rows cut by the tile's edge.
+ */
+static void speed_canvas(uint8_t *cv, int n, int col)
+{
+    enum { H = 5 };
+    int x0 = n < 4 ? 4 - n : -1;
+    memset(cv, 0, 8 * 24);
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < 2 * H; k++) {
+            int x = x0 + 2 * i + (k < H ? k : 2 * H - 1 - k) / 2;
+            if (x >= 0 && x < 8) cv[(12 - H + k) * 8 + x] = (uint8_t)(i & 1 ? 3 : col);
+        }
+}
 
 static int shade_portal(double x, double y, const void *ctx)
 {
     const PortalCtx *p = (const PortalCtx *)ctx;
     double cx = 4.0, cy = 12.0;
-    if (p->kind >= OBJ_SPEED_0 - OBJ_PORTAL_CUBE) {
-        /* speed portal: 1..4 chevrons */
-        int n = p->kind - (OBJ_SPEED_0 - OBJ_PORTAL_CUBE) + 1;
-        double gap = 1.9, w = 2.6, h = 5.5;
-        double x0 = cx - (n - 1) * gap * 0.5 - w * 0.5;
-        for (int i = 0; i < n; i++) {
-            double xa = x0 + i * gap;
-            /* distance to the chevron's two strokes (xa, cy-h) - (xa+w, cy) - (xa, cy+h) */
-            double ty = fabs(y - cy);
-            if (ty > h + 0.5) continue;
-            double ex = xa + w * (1.0 - ty / h);
-            if (fabs(x - ex) < 0.75) return ty < 1.2 ? 3 : p->col;
-        }
-        return 0;
-    }
     double rx = 3.75, ry = 11.6;
     double d = (x - cx) * (x - cx) / (rx * rx) + (y - cy) * (y - cy) / (ry * ry);
     if (d > 1.0) return 0;
@@ -473,12 +477,12 @@ static void make_level_tiles(void)
     flip_v(&s_bg[T_SPIKE_SM_DOWN]);
     for (int i = 0; i < 4; i++) s_bg_pal[T_SPIKE_UP + i] = PAL_WORLD;
 
-    for (int f = 0; f < SAW_FRAMES; f++) {
-        SawCtx sc = {f * (2.0 * PI / 6.0) / SAW_FRAMES};
-        uint8_t cv[64];
-        shade_canvas(cv, 8, 8, shade_saw, &sc, 3);
-        canvas_tile(cv, 8, 0, 0, &s_saw[f]);
-    }
+    /* (its dashed ring is 12 pixels, a tooth 2 of them: what a turn can
+     * show is the dashes and the gaps changing places, so the frames are
+     * half a tooth apart, the two pictures in turn; and an eighth of a
+     * tooth on, so that no pixel's middle is on a tooth's edge, its side
+     * decided by rounding) */
+    for (int f = 0; f < SAW_FRAMES; f++) saw_tile(&s_saw[f], (f * 0.5 + 0.125) * (2.0 * PI / 6.0));
     s_bg[T_SAW] = s_saw[0];
     s_bg_pal[T_SAW] = PAL_WORLD;
 
@@ -496,9 +500,10 @@ static void make_level_tiles(void)
     }
 
     for (int k = 0; k < T_PORTAL_KINDS; k++) {
-        PortalCtx pc = {PORTAL_COL[k], k};
+        PortalCtx pc = {PORTAL_COL[k]};
         uint8_t cv[8 * 24];
-        shade_canvas(cv, 8, 24, shade_portal, &pc, 3);
+        if (k >= OBJ_SPEED_0 - OBJ_PORTAL_CUBE) speed_canvas(cv, k - (OBJ_SPEED_0 - OBJ_PORTAL_CUBE) + 1, PORTAL_COL[k]);
+        else shade_canvas(cv, 8, 24, shade_portal, &pc, 3);
         for (int part = 0; part < 3; part++) {
             canvas_tile(cv, 8, 0, part, &s_bg[T_PORTAL + 3 * k + part]);
             s_bg_pal[T_PORTAL + 3 * k + part] = PORTAL_PAL[k];
@@ -661,10 +666,12 @@ static void make_logo(void)
 
 /* --- sprites --- */
 
-/* Rotate art (w x h, centred) by deg clockwise into a 16x16 frame. */
+/* Rotate art (w x h, centred) by deg clockwise into a 16x16 frame: the art
+ * k times as big (scale2x), each frame pixel the colour most of its
+ * samples fall on there. */
 typedef struct {
     const uint8_t *src;
-    int w, h;
+    int w, h, k;
     double co, si;
 } RotCtx;
 
@@ -672,10 +679,32 @@ static int shade_rot(double x, double y, const void *ctx)
 {
     const RotCtx *r = (const RotCtx *)ctx;
     double px = x - 8.0, py = y - 8.0;
-    double ax = r->co * px + r->si * py + r->w * 0.5, ay = -r->si * px + r->co * py + r->h * 0.5;
+    double ax = (r->co * px + r->si * py + r->w * 0.5) * r->k, ay = (-r->si * px + r->co * py + r->h * 0.5) * r->k;
     int ix = (int)floor(ax), iy = (int)floor(ay);
-    if (ix < 0 || iy < 0 || ix >= r->w || iy >= r->h) return 0;
-    return r->src[iy * r->w + ix];
+    if (ix < 0 || iy < 0 || ix >= r->w * r->k || iy >= r->h * r->k) return 0;
+    return r->src[iy * r->w * r->k + ix];
+}
+
+/*
+ * Scale2x (EPX): w x h art twice as big, a pixel's four quarters each
+ * taking the colour of the two neighbours beside it where those agree
+ * (and the other two don't), so a diagonal edge comes out a diagonal, not
+ * a staircase of 2x2 steps. Three times over, the art 8 times as big is
+ * what the frames are turned from: turned straight from the art, each
+ * edge pixel is a square that the turn breaks into lumps and ears.
+ */
+static void scale2x(const uint8_t *a, int w, int h, uint8_t *o)
+{
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint8_t P = a[y * w + x], A = y > 0 ? a[(y - 1) * w + x] : 0, D = y < h - 1 ? a[(y + 1) * w + x] : 0;
+            uint8_t C = x > 0 ? a[y * w + x - 1] : 0, B = x < w - 1 ? a[y * w + x + 1] : 0;
+            uint8_t *q = &o[(2 * y) * 2 * w + 2 * x];
+            q[0] = C == A && C != D && A != B ? A : P;
+            q[1] = A == B && A != C && B != D ? B : P;
+            q[2 * w] = D == C && D != B && C != A ? C : P;
+            q[2 * w + 1] = B == D && B != A && D != C ? D : P;
+        }
 }
 
 static void art_canvas(const char *const *rows, int w, int h, uint8_t *out)
@@ -696,14 +725,32 @@ static void put_frame(int base, const uint8_t *cv)
     canvas_tile(cv, 16, 1, 1, &s_ui[base + 3]);
 }
 
-static void rotated_frames(const char *const *rows, int w, int h, int base, int n, double deg0, double step)
+/* The art turned in n frames, deg0, deg0 + step, ...: upright, the art as
+ * it is; turned, from it 8 times as big (scale2x). round: the art is round
+ * (the ball), so every frame keeps the upright one's outline and only
+ * what is inside it turns. */
+static void rotated_frames(const char *const *rows, int w, int h, int base, int n, double deg0, double step, int round)
 {
-    uint8_t src[16 * 16], cv[16 * 16];
+    static uint8_t src[16 * 16], s2[32 * 32], s4[64 * 64], s8[128 * 128];
+    uint8_t cv[16 * 16], up[16 * 16];
     art_canvas(rows, w, h, src);
+    scale2x(src, w, h, s2);
+    scale2x(s2, 2 * w, 2 * h, s4);
+    scale2x(s4, 4 * w, 4 * h, s8);
+    RotCtx r0 = {src, w, h, 1, 1.0, 0.0};
+    shade_canvas(up, 16, 16, shade_rot, &r0, 3);
     for (int f = 0; f < n; f++) {
-        double a = (deg0 + step * f) * PI / 180.0;
-        RotCtx r = {src, w, h, cos(a), sin(a)};
-        shade_canvas(cv, 16, 16, shade_rot, &r, 3);
+        double deg = deg0 + step * f, a = deg * PI / 180.0;
+        RotCtx r = {s8, w, h, 8, cos(a), sin(a)};
+        if (fabs(deg) < 1e-9) memcpy(cv, up, sizeof(cv));
+        else shade_canvas(cv, 16, 16, shade_rot, &r, 3);
+        if (round)
+            for (int i = 0; i < 16 * 16; i++) {
+                int x = i % 16, y = i / 16;
+                int edge = up[i] && (x == 0 || y == 0 || x == 15 || y == 15 || !up[i - 1] || !up[i + 1] || !up[i - 16] ||
+                                     !up[i + 16]);
+                cv[i] = !up[i] ? 0 : edge ? up[i] : cv[i] ? cv[i] : up[i];
+            }
         put_frame(base + 4 * f, cv);
     }
 }
@@ -755,17 +802,17 @@ static void make_sprites(void)
     static const char *const WAVE[8] = {"KK......", "KPKK....", "KPPPKK..", "KPSSPPK.",
                                         "KPSSPPK.", "KPPPKK..", "KPKK....", "KK......"};
     for (int i = 0; i < ICON_COUNT; i++) {
-        rotated_frames(ICON_ART[i], 8, 8, ST_CUBE, CUBE_FRAMES, 0.0, 15.0);
+        rotated_frames(ICON_ART[i], 8, 8, ST_CUBE, CUBE_FRAMES, 0.0, 15.0, 0);
         memcpy(s_icons[i], &s_ui[ST_CUBE], sizeof(s_icons[i]));
         Tile t;
         art(&t, ICON_ART[i], ".PSK");
         half_down(&t, &s_ui[UT_ICON + 2 * i]);
     }
     memcpy(&s_ui[ST_CUBE], s_icons[0], sizeof(s_icons[0]));
-    rotated_frames(SHIP, 14, 10, ST_SHIP, SHIP_FRAMES, -30.0, 10.0);
-    rotated_frames(BALL, 8, 8, ST_BALL, BALL_FRAMES, 0.0, 22.5);
-    rotated_frames(UFO, 12, 10, ST_UFO, UFO_FRAMES, -15.0, 15.0);
-    rotated_frames(WAVE, 8, 8, ST_WAVE, WAVE_FRAMES, -45.0, 45.0);
+    rotated_frames(SHIP, 14, 10, ST_SHIP, SHIP_FRAMES, -30.0, 10.0, 0);
+    rotated_frames(BALL, 8, 8, ST_BALL, BALL_FRAMES, 0.0, 22.5, 1);
+    rotated_frames(UFO, 12, 10, ST_UFO, UFO_FRAMES, -15.0, 15.0, 0);
+    rotated_frames(WAVE, 8, 8, ST_WAVE, WAVE_FRAMES, -45.0, 45.0, 0);
 
     /* effects (8x16 sprites: art in the top tile) */
     for (int y = 0; y < 3; y++)
@@ -832,6 +879,8 @@ static void level_colors(int pal, Rgb out[LC_COUNT])
     out[LC_SEP] = rgb_scale(rgb_of(p->ground), 0.78);
     out[LC_HUD] = rgb_scale(sky, 0.30);
     out[LC_HUD_DIM] = rgb_scale(sky, 0.62);
+    for (int k = 0; k < SKY_BANDS; k++)
+        out[LC_BAND + k] = rgb_mix(rgb_of(p->bg_top), rgb_of(p->bg_bot), (k + 0.5) / SKY_BANDS);
 }
 
 /* Colours that don't change with the level (exported for the ROM) */
@@ -1478,19 +1527,35 @@ static int cmd_view(int idx, double px, const char *out)
     int pal = g.pal;
     for (int t = 0; t < g.ntrig; t++)
         if (g.trig[t].x <= px) pal = g.trig[t].pal;
-    Rgb bp[8][4];
+    Rgb bp[8][4], lc[LC_COUNT];
     bg_palettes(pal, bp);
+    level_colors(pal, lc);
     int cam = (int)lround(px * 8) - 45; /* camera in pixels */
-    for (int sx = -8; sx < 168; sx += 8) {
-        int wx = (int)floor((cam + sx) / 8.0), x = wx * 8 - cam;
-        for (int row = 1; row < 18; row++) {
-            int tile = T_EMPTY, ly = 15 - row;
-            if (row == 16) tile = T_GROUND_TOP + ((wx & 3) == 0);
-            else if (row == 17) tile = T_GROUND_LOW + ((wx & 3) == 0);
-            else if (wx >= 0 && wx < g.width && ly < GS_ROWS) tile = CELL(&g, wx, ly);
-            blit(img, W, H, x * S, row * 8 * S, S, &s_bg[tile], bp[s_bg_pal[tile]], 0, 0);
+    /* drawn once for each of the sky's bands (the ROM changes colour 0 of
+     * the palettes but the ground's and the bar's at each band's first
+     * line), each band's lines kept */
+    uint8_t *tmp = (uint8_t *)calloc((size_t)W * H * 3, 1);
+    for (int band = 0; band <= SKY_BANDS; band++) {
+        Rgb bb[8][4];
+        memcpy(bb, bp, sizeof(bb));
+        if (band < SKY_BANDS)
+            for (int p = 0; p < 8; p++)
+                if (p != PAL_GROUND && p != PAL_HUD && p != PAL_TEXT) bb[p][0] = lc[LC_BAND + band];
+        for (int sx = -8; sx < 168; sx += 8) {
+            int wx = (int)floor((cam + sx) / 8.0), x = wx * 8 - cam;
+            for (int row = 1; row < 18; row++) {
+                int tile = T_EMPTY, ly = 15 - row;
+                if (row == 16) tile = T_GROUND_TOP + ((wx & 3) == 0);
+                else if (row == 17) tile = T_GROUND_LOW + ((wx & 3) == 0);
+                else if (wx >= 0 && wx < g.width && ly < GS_ROWS) tile = CELL(&g, wx, ly);
+                blit(tmp, W, H, x * S, row * 8 * S, S, &s_bg[tile], bb[s_bg_pal[tile]], 0, 0);
+            }
         }
+        /* band k: lines 8 + 15k .. 22 + 15k; then the rest (the ground) */
+        int y0 = 8 + SKY_BAND_LINES * band, y1 = band < SKY_BANDS ? y0 + SKY_BAND_LINES : 144;
+        memcpy(img + (size_t)y0 * S * W * 3, tmp + (size_t)y0 * S * W * 3, (size_t)(y1 - y0) * S * W * 3);
     }
+    free(tmp);
     /* progress bar row */
     int pc = (int)(px / g.width * 100);
     blit(img, W, H, 2 * 8 * S, 0, S, &s_ui[UT_BAR_L], bp[PAL_HUD], 0, 0);

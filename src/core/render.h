@@ -19,6 +19,12 @@ static inline float view_sy(const View *v, float wy) { return SCREEN_H - (wy - v
 /* Body colour of spikes and saws (their outline is the palette's block_edge). */
 #define SPIKE_FILL RGBA(6, 6, 10, 235)
 
+/* Move the camera less than a device pixel up or down, so the ground (y=0)
+ * and everything on it lie on whole pixels (draw.h's pixel grid). They stay
+ * sharp where the edges of everything else are smoothed (the PSP's
+ * smoothing: src/psp/gfx_gu.c); elsewhere edges land on whole pixels anyway. */
+void view_snap(View *v);
+
 void render_background(const View *v);
 /* Ground band at y=0 plus optional corridor floor/ceiling bands. */
 void render_ground(const View *v, float corr_floor, float corr_ceil, float corr_alpha);
@@ -31,6 +37,8 @@ void render_orb(float cx, float cy, float r, Color c, float time, float pulse);
 void render_portal(float cx, float cy, Color c, float time, int mode_icon, int grav_arrow);
 void render_saw(float cx, float cy, float r, float angle, Color fill, Color edge);
 void render_coin(float cx, float cy, float r, float spin, float alpha, int ghost);
+/* A practice checkpoint (a green diamond). */
+void render_checkpoint(float cx, float cy);
 
 /* Small helpers for UI */
 void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge);

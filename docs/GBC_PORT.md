@@ -25,9 +25,18 @@ shared with them is in [PORTING.md](PORTING.md).
   is a falling sine on the wave channel, as the other versions' kick is;
   the bass pauses for it and comes back, much like their sidechain. The
   saw and square bass play an octave higher than in the other versions,
-  where a small speaker plays them.
-- **The level's palette changes**, blended over 0.8 s, and the beat flashing
-  the block edges and the ground line.
+  where a small speaker plays them. In stereo (headphones), the arpeggio
+  is panned as the other versions pan its instrument: the pluck to the
+  left, the saw pluck and the bell to the right; the melody, bass and
+  drums stay in the middle. A note held on the melody's channel comes back
+  after a sound effect (a coin, a checkpoint) borrows the channel, and the
+  held notes come back after a pause.
+- **The level's palette changes**, blended over 0.8 s, the beat flashing
+  the block edges and the ground line, and the sky a gradient from the
+  palette's top colour to its bottom one, in 8 bands (on the title too).
+- **A death as on the other versions**: the screen shakes and flashes white
+  for a moment, and the player bursts into 22 particles in its two colours
+  and white sparks, with a ring.
 - **Practice mode** with checkpoints, the attempt counter, the progress bar
   and percentage, "new best", pause menu and the results screen.
 - **The title screen over the game playing itself**: the other versions'
@@ -116,11 +125,16 @@ garage and checks they are saved, in VRAM and in the sprite palette,
 checks that the level card's coins are the saved ones and that a save of
 the first version is carried over, and starts a level holding A from the
 level select, which must not jump; after each level, that the save has its
-finish, coins and attempt. `--shots DIR --every
-N` saves screenshots, `--delay N` starts the levels N frames later (work
-done every other or every fourth frame then falls on other ticks),
-`--perf` plays the `PERF=1` build and prints how many scanlines each part
-of the frames took, `--perf-csv` every frame's.
+finish, coins and attempt. It plays the first level a second time with a
+pause a third of the way in, and fails unless the music's beats fall on the
+same ticks of the run as without the pause and the screen shows the run as
+it stopped and then the whole pause menu, nothing between; and before the
+levels it dies six times in the first level, failing if a frame runs late
+anywhere from the death through its effects to the next attempt. `--shots
+DIR --every N` saves screenshots, `--delay N` starts the levels N frames
+later (work done every other or every fourth frame then falls on other
+ticks), `--perf` plays the `PERF=1` build and prints how many scanlines
+each part of the frames took, `--perf-csv` every frame's.
 
 ## How it works
 
@@ -133,7 +147,7 @@ of the frames took, `--perf-csv` every frame's.
 | `play.c` | a level's frame: camera, background streaming, the physics, practice, pause, respawn; the title's demo run (the same code, with the run's presses and a loop) |
 | `play_fx.c`, `play_ui.c` | sprites, effects, the progress bar, palettes, deaths and finishes; the title's logo and menu, pause and results (`play.h` has what they share with `play.c`) |
 | `video.c`, `palette.c` | VRAM queues filled during the frame and written in the vertical blank; palettes |
-| `music.c` | the song and sound effect player |
+| `music.c`, `music_asm.s` | the song and sound effect player; its tick in assembly |
 | `menu.c`, `save.c`, `main.c` | garage, level select, saves, start-up |
 | `../core/progress.c` | what an attempt counts for, shared with the other platforms |
 
@@ -152,7 +166,20 @@ the cube has 6 pre-rotated frames per quarter turn, the ship 7 tilts, the
 ball 4, the UFO and wave 3 each; trails, particles, the orb ring and
 checkpoints are sprites too. Each of the garage's icons has its own cube
 frames in ROM, and the chosen one's are copied into VRAM; the two colours
-are the player's sprite palette.
+are the player's sprite palette. `gbc_tool` turns the frames from the
+8-pixel art made 8 times as big by Scale2x (turned straight from the art,
+each edge pixel's square broke into lumps and stray corners), each pixel
+the colour most of it falls on, the outline's counted a little more; the
+upright frames are the art itself, and the ball's frames keep the upright
+one's round outline, only what is inside turning.
+
+**Shapes at 8 pixels a block.** The small saw is a disc with the edge's
+colour all round and inside it a ring dashed by its 6 teeth, the dashes
+and gaps changing places as it spins (an 8x8 tile has no room for teeth
+beyond the disc, and the ring is 12 pixels: two to a tooth). A speed
+portal's chevrons are the PC's height and slope, a pixel wide and 2
+apart, every other one white: in one colour, as close as the PC's, they
+ran together.
 
 **The title** runs a level as a level is played, the other versions' demo
 level with their press table (keyed by position and converted to 16.16 by
@@ -177,7 +204,54 @@ emulator test check.
 **The music** comes from the same note data as the synth
 (`src/core/songs.c`): `gbc_tool` arranges each song's tracks onto the
 channels (chords to their top note, the pad where the lead rests) as byte
-streams the player reads once per tick.
+streams the player reads once per tick. The tick is assembly
+(`music_asm.s`, each channel's state at fixed addresses and each channel's
+code its own): it runs first in every frame, before the physics, and can't
+wait for a quieter one. The wave channel plays the bass and the kick, two
+waveforms, and its wave RAM can only be written while the channel is
+stopped; switching its DAC off for that clicks on the hardware, so the
+channel is stopped by its length counter instead, a tick before a kick
+(and on the kick's last tick, for the bass after it), and the waveform
+goes in on the next tick with the DAC on. The pulse and noise channels
+restart at volume 0 rather than switching their DACs off, for the same
+reason.
+
+**The sky** is a gradient of 8 bands of 15 scanlines, from the level
+palette's top colour to its bottom one (`gbc_tool` makes each band's
+colour, and palette changes blend them with the rest). The sky is colour
+0 of five of the eight background palettes (the level's tiles and the
+objects'); an interrupt at the first line of each band writes its colour
+into them in the horizontal blank before it, after waiting for it
+(palettes can't be written while the LCD draws a line). Band 0 is written
+in the vertical blank's interrupt, as those palettes aren't shown above
+the level: not with the rest of the vertical blank's work, which waits
+for the frame's work to end, so a frame that runs long (drawing the pause
+menu or the results takes two or three) would show the last band's colour,
+the darkest, at the top of the sky. On the title the level starts at line
+80, and the bands from there.
+
+**The pause menu and the results** are drawn into the window's map while
+the window is hidden, and the window is switched on in the vertical blank
+after (`g_lcdc_on`), so they appear whole and from the top of a frame
+(shown while the LCD draws a frame, the window starts on the line it is
+switched on at). The pause menu is drawn as the level begins, while the
+screen is still blank (drawing it takes three frames, each byte waiting
+for the LCD), so a pause shows it from the next frame; the results are
+drawn over it when the level is finished, the run staying on the screen
+as it stopped meanwhile. A byte for VRAM is written with interrupts off
+from the check that the LCD isn't reading it to the write: a sky band's
+interrupt in between can return late in the next line, when a real LCD
+can be drawing again.
+
+**A death**: its frame ran the physics, so its effects start in the frames
+after, which don't: the burst, the shake (the level's scroll, and SCY in
+the same interrupt as the scroll, 0 to 2 pixels up; map row 18 is ground
+for it) and the white flash (the palettes composed a quarter of the way to
+white, fading over 16 frames) from the next frame, and what the attempt
+counts for (the progress, the save, "new best") from the one after. The
+burst is 22 sprites (the 8 the fireworks use and 14 more after the orb's
+ring) in three sprite palettes made from the player's colours, moved in
+assembly.
 
 ## The CPU budget
 
@@ -192,33 +266,45 @@ to fit:
   stack), 8-bit loops that visit only the set bits of a column's row mask.
 - The helpers called most, in assembly: the box edges, the cell
   distances, the row masks (`gbsim.c`); stepping and packing the palettes
-  during a palette change (`palette.c`), which took 65 scanlines in C;
-  writing palettes and background columns to the hardware, which has to
-  fit in the 10 scanlines of the vertical blank (`video.c`).
+  during a palette change, and fading or whitening them (`palette.c`),
+  which took 65 scanlines in C; writing palettes and background columns to
+  the hardware, which has to fit in the 10 scanlines of the vertical blank,
+  and the sky's interrupt (`video.c`); the music's tick (`music_asm.s`,
+  3 scanlines a tick on average and 8 at most; SDCC's C took 10 and 32,
+  when every channel started a note); a death's particles, the save's
+  checksum.
 - Objects next to the player's cells are only tested if they can reach
   out of their cell (a big saw, an orb, a portal).
 - Each frame runs the music first and the physics next; then the
   columns coming into view, the progress bar and the palettes are only
-  done if their longest run still fits before the next frame, else a frame
-  later (columns are drawn one ahead of the screen for this).
+  done if their longest run (with a few scanlines for the sky's
+  interrupts meanwhile) still fits before the next frame, else a frame
+  later (columns are drawn one ahead of the screen for this). The start of
+  a palette change is set up in one frame and shown in the next.
 
 Scanlines per frame, mean / worst, playing each level through (counted
-in cycles by PyBoy):
+in cycles by PyBoy, from the vertical blank to the end of the frame's
+work, the sky's interrupts included):
 
 | Level | 0 | 1 | 2 | 3 | 4 | 5 |
 |-------|---|---|---|---|---|---|
 | physics | 40 / 106 | 40 / 106 | 42 / 113 | 42 / 115 | 44 / 110 | 43 / 111 |
-| the frame's work | 72 / 137 | 72 / 137 | 74 / 143 | 75 / 146 | 80 / 142 | 77 / 145 |
+| the work that can't wait (music, physics, sprites) | 59 / 127 | 60 / 128 | 62 / 137 | 61 / 137 | 68 / 144 | 64 / 137 |
+| the frame's work | 70 / 144 | 71 / 144 | 74 / 145 | 74 / 146 | 80 / 146 | 75 / 145 |
 
-So the busiest frames leave under a tenth of the frame; what can wait
-then waits. With `PERF=1` the ROM times the parts of each frame itself
-(`scripts/gbc-emu-test.py --perf`); its timers add 10-25 scanlines.
+So the busiest frames leave 10 of the 154 scanlines or more before what
+can wait, which then waits. The sky's interrupts take 3 to 4 scanlines a
+frame on average, 13 at most; the music's tick in assembly gave back 7 on
+average and up to 24. With `PERF=1` the ROM times the parts of each frame
+itself (`scripts/gbc-emu-test.py --perf`); its timers add 10-25
+scanlines.
 
-ROM: 256 KB (MBC5, 16 banks), ~170 KB used: 12.5 KB of code and tables in
+ROM: 256 KB (MBC5, 16 banks), ~170 KB used: 13 KB of code and tables in
 bank 0 (what runs while a level's bank is mapped), the physics in one
-bank, the menus, palettes, sprites and effects in another, the tiles and
-icons in one, a level in each of six, the songs in two, the title's demo
-level in one. RAM: 2.5 KB of the 32 KB. Battery RAM: the save (under 150
+bank, the menus, palettes, sprites and effects in another (nearly full:
+the next of them needs a bank of its own), the tiles and icons in one, a
+level in each of six, the songs in two, the title's demo level in one.
+RAM: 3 KB of the 32 KB. Battery RAM: the save (under 150
 bytes).
 
 The Game Boy draws 59.73 frames a second, not 60, and the game ticks once
@@ -245,8 +331,9 @@ and most of the work can be skipped or done with 8 and 16-bit numbers.
 - *Graphics.* 160x144, an 8x8 tile grid, 4 colours per tile from 8
   palettes, no rotation, scaling or transparency, 10 sprites per line. The
   PC version's look, glowing outlines, pulsing shapes, smooth rotation,
-  particles, a parallax background, doesn't carry over; the Game Boy shows the
-  same level geometry in flat tiles. A hand-drawn art pass (tiles made for
+  a parallax background, doesn't carry over (the sky's gradient and a
+  death's particles do, as far as tiles and sprites go); the Game Boy shows
+  the same level geometry in flat tiles. A hand-drawn art pass (tiles made for
   8x8, not converted) would do more for the look than any effect.
 - *Sound.* Two pulse channels, one 4-bit wave, one noise: the songs keep
   their melody, bass line and drums, but lose the chords, supersaws,
@@ -257,13 +344,18 @@ and most of the work can be skipped or done with 8 and 16-bit numbers.
   more streaming per frame.
 
 **Not limits:** ROM and RAM. A level is 10 KB uncompressed and MBC5
-cartridges go up to 8 MB, so many more levels would fit; the game uses 2
+cartridges go up to 8 MB, so many more levels would fit; the game uses 3
 KB of RAM.
 
 **Tested on:** a Game Boy Advance (in its Game Boy Color mode, from a flash
 cartridge), and PyBoy. Not yet on a Game Boy Color itself or in the most
 accurate emulators (SameBoy, Gambatte). The frame timing was measured in
 PyBoy, which counts instruction cycles; the game doesn't rely on
-mid-scanline tricks beyond a scroll change at line 8 in a level and a
-background map change at line 80 on the title, made in the horizontal
-blank before the line, so it should behave the same.
+mid-scanline tricks beyond a scroll change at line 8 in a level, a
+background map change at line 80 on the title and the sky's colour every
+15 lines, made in the horizontal blank before the line (the sky's five
+colours take 60 of the CPU's cycles there; on a line with many sprites the
+blank is shorter and the last ones go into the next line's first 80 dots,
+when palettes can still be written), so it should behave the same. The
+sound was checked in PyBoy too, which doesn't model the clicks of a
+channel's DAC switching; the wave channel's DAC now stays on.

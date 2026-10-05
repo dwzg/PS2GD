@@ -14,10 +14,6 @@
 #define GLYPH_RIGHT "\x07"
 
 enum { ALIGN_LEFT = 0, ALIGN_CENTER = 1, ALIGN_RIGHT = 2 };
-/* Or'ed into align: draw at exactly the scale given, off the pixel grid
- * (draw.h). For text that grows or shrinks, which on the grid could only
- * change size a whole screen pixel at a time. */
-#define FONT_FREE 4
 
 void font_init(void);
 
@@ -26,8 +22,11 @@ void font_init(void);
 int font_glyph(char c, uint8_t rows[7]);
 
 /* Size of one font pixel at a scale: on the pixel grid, the nearest whole
- * number of screen pixels (at least one). */
+ * number of screen pixels (at least one). font_pixel is its width,
+ * font_pixel_y its height (they differ where the grid down the screen is
+ * another than across it, draw.h). */
 float font_pixel(float scale);
+float font_pixel_y(float scale);
 /* Width in pixels of a string at the given pixel scale. */
 float font_width(const char *s, float scale);
 /* Height of the glyphs at the given pixel scale. */
@@ -42,5 +41,11 @@ void font_draw(float x, float y, float scale, Color c, int align, const char *s)
 /* Title-style text: vertical gradient fill with a dark outline. */
 void font_draw_fancy(float x, float y, float scale, Color top, Color bottom, Color outline,
                      float outline_px, int align, const char *s);
+/* The same text k times the size font_draw_fancy draws it (its pixels and
+ * outline across and down), off the pixel grid (draw.h): for text that
+ * grows or shrinks, which on the grid could only change size a whole
+ * screen pixel at a time. At k = 1 it is as large as on the grid. */
+void font_draw_fancy_grown(float x, float y, float scale, float k, Color top, Color bottom, Color outline,
+                           float outline_px, int align, const char *s);
 
 #endif

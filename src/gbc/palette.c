@@ -52,8 +52,10 @@ static const uint8_t MENU_SRC[32] = {
 /* the blend the level colours were last computed for, and how the
  * palettes were last composed */
 static uint8_t s_from = 0xff, s_to, s_t;
-static uint8_t s_flash = 0xff, s_fade_done = 0xff;
+static uint8_t s_flash = 0xff, s_fade_done = 0xff, s_white_done, s_blend_due;
+uint8_t g_pal_split, g_pal_pending;
 static const uint8_t *s_map_done;
+uint8_t g_pal_white;
 
 void pal_init(void) BANKED
 {
@@ -74,12 +76,19 @@ static void put(uint8_t *out, const uint8_t *c, const uint8_t *ft)
 /* compose() at full brightness, in assembly (three times as fast as
  * SDCC's code; a palette change does this every other frame): the 32
  * colours map names, from s_src, packed into g_bgpal. map in de. */
+static uint16_t *s_cmp_out; /* where compose_full and compose_tab write, how many colours */
+static uint8_t s_cmp_n;
+
 static void compose_full(const uint8_t *map) __naked
 {
     map;
     __asm
-    ld hl, #_g_bgpal
-    ld c, #32
+    ld hl, #_s_cmp_out
+    ld a, (hl+)
+    ld h, (hl)
+    ld l, a
+    ld a, (_s_cmp_n)
+    ld c, a
 1$:
     ld a, (de)
     inc de
@@ -118,24 +127,155 @@ static void compose_full(const uint8_t *map) __naked
     __endasm;
 }
 
+/* compose_full() with each channel through a table of 32 (faded, or
+ * whitened): s_tab, 32 bytes in a 256-byte page (s_tab_buf's), its
+ * address in s_tab_hi:s_tab_lo. */
+static uint8_t s_tab_buf[64];
+static uint8_t s_tab_lo, s_tab_hi, s_tab_n, s_tab_g;
+static const uint8_t *s_tab_ft, *s_tab_wt;
+
+/* s_tab[c] = f + s_tab_wt[31 - f], f = s_tab_ft[c]: faded, then whitened */
+static void tab_build(void) __naked
+{
+    __asm
+    ld a, (_s_tab_lo)
+    ld e, a
+    ld a, (_s_tab_hi)
+    ld d, a
+    ld hl, #_s_tab_ft
+    ld a, (hl+)
+    ld c, a
+    ld b, (hl)
+    ld a, #32
+    ld (_s_tab_n), a
+1$:
+    ld a, (bc) ; f
+    inc bc
+    push af
+    cpl
+    add a, #32 ; 31 - f
+    ld hl, #_s_tab_wt
+    add a, (hl)
+    inc hl
+    ld h, (hl)
+    ld l, a
+    jr nc, 2$
+    inc h
+2$:
+    pop af
+    add a, (hl)
+    ld (de), a
+    inc de
+    ld a, (_s_tab_n)
+    dec a
+    ld (_s_tab_n), a
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
+static void compose_tab(const uint8_t *map) __naked
+{
+    map;
+    __asm
+    ld a, (_s_tab_lo)
+    ld c, a
+    ld a, (_s_tab_hi)
+    ld b, a
+    ld hl, #_s_cmp_out
+    ld a, (hl+)
+    ld h, (hl)
+    ld l, a
+    ld a, (_s_cmp_n)
+    ld (_s_tab_n), a
+1$:
+    ld a, (de)
+    inc de
+    push de
+    push hl
+    add a, a
+    add a, a
+    add a, #<_s_src
+    ld e, a
+    ld a, #0
+    adc a, #>_s_src
+    ld d, a
+    ld h, b
+    ld a, (de) ; red
+    inc de
+    add a, c
+    ld l, a
+    ld a, (hl)
+    push af
+    ld a, (de) ; green
+    inc de
+    add a, c
+    ld l, a
+    ld a, (hl)
+    ld (_s_tab_g), a
+    ld a, (de) ; blue
+    add a, c
+    ld l, a
+    ld a, (hl)
+    add a, a
+    add a, a
+    ld e, a
+    ld a, (_s_tab_g) ; green: its low 3 bits to bits 5..7, high 2 to bits 0..1
+    rrca
+    rrca
+    rrca
+    ld l, a
+    and a, #0x03
+    or a, e
+    ld e, a
+    ld a, l
+    and a, #0xe0
+    ld l, a
+    pop af
+    or a, l
+    pop hl
+    ld (hl+), a
+    ld a, e
+    ld (hl+), a
+    pop de
+    ld a, (_s_tab_n)
+    dec a
+    ld (_s_tab_n), a
+    jr nz, 1$
+    ret
+    __endasm;
+}
+
+/* the sky's bands, for g_skypal */
+static const uint8_t BAND_SRC[SKY_BANDS] = {LC_BAND, LC_BAND + 1, LC_BAND + 2, LC_BAND + 3,
+                                            LC_BAND + 4, LC_BAND + 5, LC_BAND + 6, LC_BAND + 7};
+
+/* The 32 colours of map into g_bgpal, a level's sky bands into g_skypal. */
 static void compose(const uint8_t *map, uint8_t fade)
 {
-    const uint8_t *ft = s_fade[fade];
-    uint8_t *out = (uint8_t *)g_bgpal;
-    uint8_t i = 32;
+    uint8_t full = fade == 8 && !g_pal_white;
     s_fade_done = fade;
+    s_white_done = g_pal_white;
     s_map_done = map;
     g_pal_dirty |= 1;
-    if (fade == 8) {
-        compose_full(map);
-        return;
+    if (!full) {
+        uint8_t *t = s_tab_buf + ((uint8_t)(32 - (uint8_t)(uint16_t)s_tab_buf) & 31);
+        s_tab_lo = (uint8_t)(uint16_t)t;
+        s_tab_hi = (uint8_t)((uint16_t)t >> 8);
+        /* (a death's flash: g_pal_white / 32 of the way to white) */
+        s_tab_ft = s_fade[fade];
+        s_tab_wt = gbc_lerp5[g_pal_white];
+        tab_build();
     }
-    do {
-        const uint8_t *c = s_src[*map++];
-        uint8_t r = ft[c[0]], g = ft[c[1]], b = ft[c[2]];
-        *out++ = (uint8_t)(r | (g << 5));
-        *out++ = (uint8_t)((g >> 3) | (b << 2));
-    } while (--i);
+    s_cmp_out = g_bgpal;
+    s_cmp_n = 32;
+    if (full) compose_full(map);
+    else compose_tab(map);
+    if (map != LEVEL_SRC) return;
+    s_cmp_out = g_skypal;
+    s_cmp_n = SKY_BANDS;
+    if (full) compose_full(BAND_SRC);
+    else compose_tab(BAND_SRC);
 }
 
 /* A palette change, set up when it starts: for each channel of the level
@@ -251,7 +391,8 @@ static void flashed(uint8_t dst, uint8_t src, uint8_t beside, uint8_t flash)
 
 void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade) BANKED
 {
-    if (from == s_from && to == s_to && t == s_t && fade == s_fade_done && s_map_done == LEVEL_SRC) {
+    if (from == s_from && to == s_to && t == s_t && fade == s_fade_done && !g_pal_white && !s_white_done && !s_blend_due &&
+        s_map_done == LEVEL_SRC) {
         /* only the beat's flash changed: the two colours it lights up */
         if (flash != s_flash) {
             const uint8_t *ft = s_fade[fade];
@@ -264,14 +405,24 @@ void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade)
         }
         return;
     }
-    if (from != s_from || to != s_to || t != s_t) {
+    if (from != s_from || to != s_to || t != s_t || s_blend_due) {
         /* the lerp table's row 0 is all 0 and row 32 the identity */
         if (from != s_from || to != s_to) {
             s_bl_a = gbc_level_pals[from].c[0];
             s_bl_b = gbc_level_pals[to].c[0];
             s_bl_n = LC_COUNT * 4;
             blend_start();
+            s_from = from;
+            s_to = to;
+            if (g_pal_split) {
+                /* (the rest on the next call: together they took too
+                 * long for a busy frame) */
+                s_blend_due = 1;
+                g_pal_pending = 1;
+                return;
+            }
         }
+        s_blend_due = 0;
         s_bl_lerp = gbc_lerp5[(uint8_t)((t + 4) >> 3)];
         s_bl_n = LC_COUNT * 4;
         blend_step();
@@ -291,6 +442,7 @@ void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade)
 void pal_black(void) BANKED
 {
     memset(g_bgpal, 0, sizeof(g_bgpal));
+    memset(g_skypal, 0, sizeof(g_skypal));
     s_fade_done = 0xff; /* (the next palette is composed afresh) */
     g_pal_dirty |= 1;
 }
@@ -317,6 +469,20 @@ void pal_sprites(void) BANKED
 {
     uint8_t p, i, c[3];
     uint8_t *out = (uint8_t *)g_objpal;
+    /* a death's particles: each of the player's colours, the same half
+     * way to white, and white (OPAL_COL1, OPAL_COL2), and white */
+    for (p = 0; p < 2; p++) {
+        const uint8_t *pc = player_color(p ? g_save.col2 : g_save.col1);
+        for (i = 0; i < 3; i++) c[i] = (uint8_t)((pc[i] + 32) >> 1);
+        put5(out + OPAL_COL1 * 8 + p * 8 + 2, pc);
+        put5(out + OPAL_COL1 * 8 + p * 8 + 4, c);
+    }
+    c[0] = c[1] = c[2] = 31;
+    for (i = 1; i < 4; i++) {
+        put5(out + OPAL_COL1 * 8 + 6, c);
+        put5(out + OPAL_COL2 * 8 + 6, c);
+        put5(out + OPAL_WHITE * 8 + 2 * i, c);
+    }
     for (p = 0; p < 3; p++)
         for (i = 0; i < 4; i++, out += 2) {
             /* the player and its effects in the colours of the garage */

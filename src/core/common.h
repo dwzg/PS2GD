@@ -26,6 +26,22 @@
  */
 #include "target.h"
 #define SCREEN_H 448
+/* the options' OUTPUT row (the sound mixed for headphones or for the
+ * console's own speakers, audio_set_output): the handhelds ask (the GBA,
+ * the PSP) */
+#ifndef AUDIO_OUTPUT_OPTION
+#define AUDIO_OUTPUT_OPTION 0
+#endif
+/* and AUTO among its choices, the frontend telling headphones plugged in
+ * (the PSP; it calls audio_set_output itself while OUTPUT is AUTO) */
+#ifndef AUDIO_OUTPUT_AUTO
+#define AUDIO_OUTPUT_AUTO 0
+#endif
+/* the options' FLICKER FILTER row (an interlaced picture softened against
+ * flicker or not, save.flicker, plat_flicker_filter): the PS2's */
+#ifndef FLICKER_OPTION
+#define FLICKER_OPTION 0
+#endif
 
 /* x in a layout drawn for a 640-wide screen, centred on this one */
 #define UI_X(x) ((x) + (SCREEN_W - 640) / 2)

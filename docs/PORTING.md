@@ -1,6 +1,7 @@
 # How the code is shared between platforms
 
-Pulse Dash runs on a PC, a PS2, a PSP and a Game Boy Color. These are very
+Pulse Dash runs on a PC, a PS2, a PSP, a Game Boy Advance and a Game Boy
+Color. These are very
 different machines, so not all of them can run the same code, but they all
 play the same game: the same levels, songs and rules, and the same physics
 to the tick. This is how the code is split to make that possible, and what a
@@ -20,7 +21,11 @@ new platform needs.
 A platform that can't read these at run time gets them converted at build
 time by a host tool that compiles them in: the Game Boy's `gbc_tool` turns
 the levels into tile maps, the songs into byte streams for its sound chip
-and the palettes into its 15-bit colours.
+and the palettes into its 15-bit colours. The Game Boy Advance reads the
+palettes itself; its `gba_tool` runs the core's level parser and the
+vector family's renderer and synth (layer 4) on the PC, to store the
+levels already parsed and drawn as tiles, draw its sprites and record its
+songs and sound effects.
 
 **2. The reference logic: integer C that every platform runs or matches.**
 
@@ -62,17 +67,68 @@ Graphics, sound output, menus and the frame loop belong to the platform.
 Platforms that draw the same way share it:
 
 - *The vector family* (PC, PS2, PSP): `src/core` draws everything as
-  triangles and rectangles in a 640x448 virtual screen (wider on the PSP),
-  plays the songs with a software synthesizer, and runs the menus. A
-  platform supplies the primitives of `src/core/gfx.h`, an audio thread
-  calling `audio_mix`, the pad as `BTN_*` bits and two save functions
-  (`src/core/platform.h`): `src/ps2` and `src/psp` are 600 to 950 lines
-  each.
-- *The tile family* (Game Boy Color): `src/gbc` streams the level into a
-  tile map, draws the player and effects as sprites and plays the songs on
-  the sound chip, all from the data `gbc_tool` makes. It plays the levels
-  that fit it (`gbc_tool levels` lists them, and says why any other
-  doesn't).
+  triangles and rectangles in a 640x448 virtual screen (wider on the PSP)
+  and plays the songs with a software synthesizer (`VECTOR_SRC` in
+  `sources.mk`), around the game's logic that runs the menus, the levels
+  and the title screen's demo (`CORE_SRC`, which a platform with a
+  presentation of its own can link alone). A platform supplies the
+  primitives of `src/core/gfx.h`, an audio thread calling `audio_mix` (below
+  the frame loop, with enough mixed ahead to outlast the loop's longest
+  stretch on the CPU, and the time from mixing to hearing given to
+  `audio_set_latency`; mixing ahead only helps if handing the sound to the
+  hardware doesn't wait for the loop too: the PSP hands it over from a
+  thread above the loop; the PS2's audsrv plays from a ring on the IOP,
+  its own processor, kept about 40 ms full), the pad as `BTN_*` bits and two save functions
+  (`src/core/platform.h`):
+  `src/ps2` and `src/psp` are 650 to 1,100 lines each. A backend built
+  with `GFX_GLOW` also draws the glows itself (`gfx_glow`, from a texture
+  on the PSP), and may decline one, which `draw_glow` then draws as a fan
+  of triangles as on the other backends. Its `target.h`
+  gives `PIXEL_GRID`, how many of the screen's pixels a virtual one
+  covers, so that text, icons and outlines land on whole pixels and come
+  out even (`draw.h`); where the picture stretches the virtual screen down
+  (the PS2's in PAL: 448 lines on 512) the frontend sets the grid down the
+  screen apart, with `draw_set_pixel_grid_y()`. The PS2's `FLICKER_OPTION`
+  adds the options' FLICKER FILTER row, kept in the save's `flicker` byte
+  (its last reserved byte: the save's format and size are unchanged) and
+  passed to `plat_flicker_filter()`.
+- *The tile family* (Game Boy Advance, Game Boy Color): the level is
+  streamed into a tile map, the player and the objects are sprites.
+  - The Game Boy Advance runs `CORE_SRC` unchanged, the menus and the
+    title's demo included, and supplies what the vector family's files
+    would: `game_draw_init()` and `game_render()` (`game.h`), which draw
+    the core's state each frame with tiles and sprites (`src/gba/gba_draw.c`),
+    and the `audio.h` API, which plays the recordings `gba_tool` made. The
+    vector family's drawing lives in files of its own for this
+    (`game_draw.c`, `play_draw.c`, `demo_draw.c`, `fx_draw.c`); what both
+    presentations need of it (the camera, the menus' palette, the
+    difficulties' colours) is in the logic's files. Its `target.h` asks
+    the core for what a CPU without floating point needs, each off unless
+    a target asks: `FX_TARGET` (it implements `fx.h` itself, in fixed
+    point), `LEVEL_PREBUILT` (the levels and the title's run parsed at
+    build time, `level_prebuilt()` giving them) and `DEMO_SNAP_EVERY` (the
+    title run's snapshots every block, made at build time with
+    `demo_record()` and given back with `demo_take_snapshots()`). One more
+    hook is about its sound, and the PSP asks for it too:
+    `AUDIO_OUTPUT_OPTION` adds the options' OUTPUT row, the music mixed
+    for headphones or for the console's own small speakers, kept in the
+    save's `speaker` byte (a reserved byte before: the save's format and
+    size are unchanged) and passed to `audio_set_output()` (`audio.h`).
+    The synth (`audio.c`) then cuts the bass below 250 Hz and compresses
+    its mix (the PSP); the GBA plays its second, speaker-mastered
+    recording.
+  - The Game Boy Color plays the levels from the data `gbc_tool` makes,
+    with its own physics (layer 3) and music player. It plays the levels
+    that fit it (`gbc_tool levels` lists them, and says why any other
+    doesn't).
+
+Where the system can put a menu of its own over the game (the PSP's HOME
+menu), the frame loop stops ticking the game while it is there, without
+making the ticks up afterwards, and tells the game with `game_suspend()`
+(`game.h`), which pauses a run and keeps a button held as the menu goes
+from counting as a press (or a direction from repeating); the synth's
+`audio_suspend()` silences the sound meanwhile (`src/psp/main_psp.c` does
+both).
 
 ## Rules for shared code
 
@@ -97,18 +153,22 @@ something a platform can match exactly:
   GameCube/Wii, 3DS, a web build): a new frontend in `src/<platform>/`
   like `src/psp/`, with a `target.h` saying how wide its virtual screen is
   and what its buttons are called (see `src/psp/target.h`), and a makefile
-  that includes `sources.mk` (the core's and the levels' sources), adds
-  the frontend's and puts its folder on the include path. Everything else
-  is shared.
-- **A 32-bit CPU without floating point** (GBA, DS, PS1): the physics runs
-  as it is; the vector family's renderer and synth use floats throughout
-  and would be slow emulated, so the presentation would be the platform's
-  own (a tile-based one on the GBA, like the Game Boy's).
+  that includes `sources.mk` and builds both its lists (`CORE_SRC`, the
+  game's logic and data, and `VECTOR_SRC`, the vector family's drawing and
+  synth), adds the frontend's and puts its folder on the include path.
+  Everything else is shared.
+- **A 32-bit CPU without floating point** (DS, PS1, like the GBA): the
+  game's logic runs as it is, in software floating point (on the GBA a
+  third of a frame on average, with the hottest routines in fast RAM); the
+  vector family's renderer and synth use floats per pixel and per sample
+  and would not fit, so the presentation is the platform's own, as
+  `src/gba` is, and the host tool can draw and record it with the
+  renderer and synth at build time, as `gba_tool` does.
 - **An 8 or 16-bit CPU** (Game Boy, NES, Master System, Mega Drive): its own
   version of the physics, with a difftest against the reference like
   `gbc_tool difftest`, and a data tool like `gbc_tool` for its formats.
 
-Whatever the platform, test it the way the Game Boy is tested
-(`scripts/gbc-emu-test.py`): play the solver's runs of every level in an
-emulator, compare the player with the reference after every tick, and
-check that no frame runs late.
+Whatever the platform, test it the way the Game Boys are tested
+(`scripts/gbc-emu-test.py`, `gba_test play`): play the solver's runs of
+every level in an emulator, compare the player with the reference after
+every tick, and check that no frame runs late.

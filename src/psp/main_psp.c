@@ -2,12 +2,14 @@
  * PSP entry point.
  *
  * Frame pacing: the GE draws each frame's display list as it is built; the
- * loop waits for it to finish, sleeps until the next vblank starts and
- * flips there. Game logic ticks at a fixed 60 Hz; each frame is drawn
+ * loop waits for it to finish (and to smooth the frame, when there is time
+ * for that before the vblank: gfx_gu.c), sleeps until the next vblank
+ * starts and flips there. Game logic ticks at a fixed 60 Hz; each frame is drawn
  * interpolated to the moment it will be on screen (the LCD runs at
  * 59.94 Hz). The loop runs at the main thread's priority (0x20), above the
- * audio thread and the save thread, so nothing delays a flip past the
- * vblank.
+ * thread that mixes the audio and the save thread, so nothing delays a flip
+ * past the vblank (the one that hands the audio over, above it, only wakes
+ * for a moment: audio_psp.c).
  *
  * HOME > Quit runs exit_callback, which must not return before the game
  * is done (the system powers down then): it has the loop finish its frame
@@ -16,11 +18,13 @@
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <psppower.h>
+#include <psphprm.h>
 #include <stdio.h>
 
 #include "psp_platform.h"
 #include "../core/audio.h"
 #include "../core/game.h"
+#include "../core/game_internal.h"
 
 PSP_MODULE_INFO("PulseDash", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_USER);
@@ -79,6 +83,17 @@ static void perf_report(unsigned frames, unsigned late, float refresh)
     }
     printf(" | audio %.1f%% | %s\n", 100.0f * (mix - last_mix) / frames / frame_us, status);
     last_mix = mix;
+    /* the smoothing (gfx_gu.c): frames drawn twice, the second drawing's
+     * and the blend's GE time (mean/most, % of a frame), frames that had no
+     * time for it or ended too close to the vblank */
+    GfxPspStats st;
+    gfx_psp_stats(&st);
+    unsigned n = st.frames ? st.frames : 1;
+    printf("pulsedash: smooth %u/%u frames | again %.1f/%.1f%% blend %.1f/%.1f%% | %u skipped, %u close | %u batches, "
+           "%u clears\n",
+           st.frames, frames, 100.0f * st.again_us / n / frame_us, 100.0f * st.again_max_us / frame_us,
+           100.0f * st.blend_us / n / frame_us, 100.0f * st.blend_max_us / frame_us, st.skipped, st.close,
+           st.batches_max, st.clears);
 }
 #define PERF_MARK(var) unsigned var = sceKernelGetSystemTimeLow()
 #define PERF_ADD(phase, from, to) perf_add(phase, (to) - (from))
@@ -86,6 +101,8 @@ static void perf_report(unsigned frames, unsigned late, float refresh)
 #define PERF_MARK(var)
 #define PERF_ADD(phase, from, to)
 #endif
+
+static int s_auto_out = -1; /* OUTPUT on AUTO: the mix set, -1 none yet */
 
 int main(int argc, char *argv[])
 {
@@ -105,21 +122,33 @@ int main(int argc, char *argv[])
 
     const float refresh = sceDisplayGetFramePerSec();
     const float frame_dt = 1.0f / (refresh > 1.0f ? refresh : 59.94f);
+    const unsigned frame_us = (unsigned)(frame_dt * 1000000.0f);
     /* how far the simulation runs ahead of the frame being drawn, in seconds
      * (0 <= ahead < one tick) */
     float ahead = 0.0f;
     sceDisplayWaitVblankStart();
+    unsigned vblank_us = sceKernelGetSystemTimeLow();
     unsigned shown = sceDisplayGetVcount();
     unsigned elapsed = 1; /* vblanks between the last two flips */
+    int home = 0;         /* the HOME dialog is up (pad_psp_home) */
 #ifdef PD_PERF
     unsigned perf_frames = 0, perf_late = 0, attempts = 0;
 #endif
     while (!s_quit) {
         PERF_MARK(t0);
         uint32_t held = pad_psp_read();
+        if (pad_psp_home() != home) {
+            /* while the system's HOME dialog is up the game stands still
+             * and is silent, a run paused (game_suspend); its time stands
+             * still too: no ticks, and none made up when the dialog goes */
+            home = !home;
+            game_suspend(home);
+            audio_suspend(home);
+            elapsed = 1; /* nor a vblank missed while it was up */
+        }
         /* this frame goes up `elapsed` vblanks after the previous one (one,
          * unless the previous frame missed its vblank) */
-        ahead -= frame_dt * (float)(elapsed < 4 ? elapsed : 4);
+        if (!home) ahead -= frame_dt * (float)(elapsed < 4 ? elapsed : 4);
         int n = 0;
         while (ahead < 0.0f && n < MAX_TICKS_PER_FRAME) {
             game_tick(held);
@@ -127,14 +156,25 @@ int main(int argc, char *argv[])
             n++;
         }
         if (ahead < 0.0f) ahead = 0.0f; /* long stall (suspend): skip ahead */
+        /* OUTPUT on AUTO: the speakers' mix unless headphones are plugged
+         * in (looked at 6 times a second; the mix changes only when it
+         * changes) */
+        if (g_game.save.speaker == OUTPUT_AUTO && (shown % 10 == 0 || s_auto_out < 0)) {
+            int spk = !sceHprmIsHeadphoneExist();
+            if (spk != s_auto_out) audio_set_output(spk);
+            s_auto_out = spk;
+        } else if (g_game.save.speaker != OUTPUT_AUTO) {
+            s_auto_out = -1;
+        }
         PERF_MARK(t1);
-        gfx_psp_begin();
+        gfx_psp_begin(vblank_us + frame_us);
         game_render(1.0f - ahead / TICK_DT);
         gfx_psp_submit();
         PERF_MARK(t2);
         gfx_psp_sync();
         PERF_MARK(t3);
         sceDisplayWaitVblankStart();
+        vblank_us = sceKernelGetSystemTimeLow();
         unsigned now = sceDisplayGetVcount();
         PERF_MARK(t4);
         gfx_psp_flip();

@@ -15,7 +15,7 @@ EE_BIN := $(OUT)/pulsedash-unpacked.elf
 EE_BIN_PACKED := $(OUT)/PULSEDASH.ELF
 
 include sources.mk
-SRC := $(CORE_SRC) $(wildcard src/ps2/*.c)
+SRC := $(CORE_SRC) $(VECTOR_SRC) $(wildcard src/ps2/*.c)
 # IOP modules from ps2sdk, compiled into the ELF as C arrays (see src/ps2/irx.c)
 IRX := libsd audsrv sio2man padman mcman mcserv
 EE_OBJS := $(patsubst src/%.c,$(OUT)/%.o,$(SRC)) $(patsubst %,$(OUT)/irx/%_irx.o,$(IRX))

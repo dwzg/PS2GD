@@ -111,18 +111,17 @@ int font_glyph(char c, uint8_t rows[7])
 }
 
 /* On a pixel grid (draw.h) font pixels are whole device pixels, the nearest
- * whole number to their size, and text starts on a device pixel; otherwise
- * small text would come out with strokes of uneven width. */
-static float grid_size(float v, float grid)
-{
-    float n = floorf(v * grid + 0.5f);
-    return (n < 1.0f ? 1.0f : n) / grid;
-}
-
+ * whole number to their size (across and down, where the grid differs), and
+ * text starts on a device pixel; otherwise small text would come out with
+ * strokes of uneven width. */
 float font_pixel(float scale)
 {
-    float g = draw_pixel_grid();
-    return g > 0.0f ? grid_size(scale, g) : scale;
+    return grid_w(scale);
+}
+
+float font_pixel_y(float scale)
+{
+    return grid_h(scale);
 }
 
 float font_width(const char *s, float scale)
@@ -134,7 +133,7 @@ float font_width(const char *s, float scale)
 
 float font_height(float scale)
 {
-    return 7 * font_pixel(scale);
+    return 7 * font_pixel_y(scale);
 }
 
 float font_center_y(float y0, float y1, float scale)
@@ -144,19 +143,18 @@ float font_center_y(float y0, float y1, float scale)
 
 typedef void (*RunFn)(float x0, float y0, float x1, float y1, int row, void *ctx);
 
-/* Walk every horizontal run of set pixels in the string. */
-static void for_each_run(float x, float y, float scale, int align, const char *s, RunFn fn, void *ctx)
+/* Walk every horizontal run of set pixels in the string, font pixels px
+ * wide and py tall; on the pixel grid (snap) or off it. */
+static void for_each_run(float x, float y, float px, float py, int snap, int align, const char *s, RunFn fn,
+                         void *ctx)
 {
-    int free = align & FONT_FREE;
-    align &= ~FONT_FREE;
-    float px = free ? scale : font_pixel(scale);
     int n = (int)strlen(s);
     float w = n > 0 ? (n * 6 - 1) * px : 0.0f;
     if (align == ALIGN_CENTER) x -= w * 0.5f;
     else if (align == ALIGN_RIGHT) x -= w;
-    if (!free) {
+    if (snap) {
         x = grid_snap(x);
-        y = grid_snap(y);
+        y = grid_snap_y(y);
     }
     for (; *s; s++, x += 6 * px) {
         unsigned char ch = norm_char(*s);
@@ -168,7 +166,7 @@ static void for_each_run(float x, float y, float scale, int align, const char *s
                 if (!(bits & (1u << (4 - c)))) { c++; continue; }
                 int start = c;
                 while (c < 5 && (bits & (1u << (4 - c)))) c++;
-                fn(x + start * px, y + r * px, x + c * px, y + (r + 1) * px, r, ctx);
+                fn(x + start * px, y + r * py, x + c * px, y + (r + 1) * py, r, ctx);
             }
         }
     }
@@ -176,7 +174,7 @@ static void for_each_run(float x, float y, float scale, int align, const char *s
 
 typedef struct {
     Color top, bottom, outline;
-    float o; /* outline width */
+    float ox, oy; /* outline width across and down */
 } FancyCtx;
 
 static void run_plain(float x0, float y0, float x1, float y1, int row, void *ctx)
@@ -189,7 +187,7 @@ static void run_outline(float x0, float y0, float x1, float y1, int row, void *c
 {
     FancyCtx *f = (FancyCtx *)ctx;
     (void)row;
-    gfx_rect(x0 - f->o, y0 - f->o, x1 + f->o, y1 + f->o, f->outline);
+    gfx_rect(x0 - f->ox, y0 - f->oy, x1 + f->ox, y1 + f->oy, f->outline);
 }
 
 static void run_fill(float x0, float y0, float x1, float y1, int row, void *ctx)
@@ -230,15 +228,15 @@ static int cmp_float(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-/* The runs (grown by o) that span the band [ya, yb), as sorted x-intervals
- * merged where they overlap or touch. Returns how many. */
-static int band_spans(const RunList *l, float o, float ya, float yb, float *iv)
+/* The runs (grown by ox across, oy down) that span the band [ya, yb), as
+ * sorted x-intervals merged where they overlap or touch. Returns how many. */
+static int band_spans(const RunList *l, float ox, float oy, float ya, float yb, float *iv)
 {
     int k = 0;
     for (int i = 0; i < l->n; i++) {
         const Box *b = &l->b[i];
-        if (b->y0 - o > ya || b->y1 + o < yb) continue;
-        float x0 = b->x0 - o, x1 = b->x1 + o;
+        if (b->y0 - oy > ya || b->y1 + oy < yb) continue;
+        float x0 = b->x0 - ox, x1 = b->x1 + ox;
         int j = k++; /* insertion sort by start */
         while (j > 0 && iv[(j - 1) * 2] > x0) {
             iv[j * 2] = iv[(j - 1) * 2];
@@ -261,21 +259,21 @@ static int band_spans(const RunList *l, float o, float ya, float yb, float *iv)
     return m;
 }
 
-static void outline_once(const RunList *l, float o, Color c)
+static void outline_once(const RunList *l, float ox, float oy, Color c)
 {
     static float ys[MAX_RUNS * 4], outer[MAX_RUNS * 2], inner[MAX_RUNS * 2];
     int ny = 0;
     for (int i = 0; i < l->n; i++) {
-        ys[ny++] = l->b[i].y0 - o;
+        ys[ny++] = l->b[i].y0 - oy;
         ys[ny++] = l->b[i].y0;
         ys[ny++] = l->b[i].y1;
-        ys[ny++] = l->b[i].y1 + o;
+        ys[ny++] = l->b[i].y1 + oy;
     }
     qsort(ys, (size_t)ny, sizeof(float), cmp_float);
     for (int j = 0; j + 1 < ny; j++) {
         float ya = ys[j], yb = ys[j + 1];
         if (yb <= ya) continue;
-        int no = band_spans(l, o, ya, yb, outer), ni = band_spans(l, 0.0f, ya, yb, inner);
+        int no = band_spans(l, ox, oy, ya, yb, outer), ni = band_spans(l, 0.0f, 0.0f, ya, yb, inner);
         for (int a = 0, i = 0; a < no; a++) {
             float x = outer[a * 2], end = outer[a * 2 + 1];
             for (; i < ni && inner[i * 2] < end; i++) {
@@ -289,20 +287,36 @@ static void outline_once(const RunList *l, float o, Color c)
 
 void font_draw(float x, float y, float scale, Color c, int align, const char *s)
 {
-    for_each_run(x, y, scale, align, s, run_plain, &c);
+    for_each_run(x, y, font_pixel(scale), font_pixel_y(scale), 1, align, s, run_plain, &c);
+}
+
+static void fancy(float x, float y, float px, float py, int snap, Color top, Color bottom, Color outline,
+                  float outline_px, float ox, float oy, int align, const char *s)
+{
+    FancyCtx f = {top, bottom, outline, ox, oy};
+    if (outline_px > 0.0f && COL_A(outline) < 255) {
+        static RunList runs;
+        runs.n = 0;
+        for_each_run(x, y, px, py, snap, align, s, run_collect, &runs);
+        outline_once(&runs, f.ox, f.oy, outline);
+    } else if (outline_px > 0.0f) {
+        for_each_run(x, y, px, py, snap, align, s, run_outline, &f);
+    }
+    for_each_run(x, y, px, py, snap, align, s, run_fill, &f);
 }
 
 void font_draw_fancy(float x, float y, float scale, Color top, Color bottom, Color outline,
                      float outline_px, int align, const char *s)
 {
-    FancyCtx f = {top, bottom, outline, (align & FONT_FREE) ? outline_px : grid_w(outline_px)};
-    if (outline_px > 0.0f && COL_A(outline) < 255) {
-        static RunList runs;
-        runs.n = 0;
-        for_each_run(x, y, scale, align, s, run_collect, &runs);
-        outline_once(&runs, f.o, outline);
-    } else if (outline_px > 0.0f) {
-        for_each_run(x, y, scale, align, s, run_outline, &f);
-    }
-    for_each_run(x, y, scale, align, s, run_fill, &f);
+    fancy(x, y, font_pixel(scale), font_pixel_y(scale), 1, top, bottom, outline, outline_px, grid_w(outline_px),
+          grid_h(outline_px), align, s);
+}
+
+void font_draw_fancy_grown(float x, float y, float scale, float k, Color top, Color bottom, Color outline,
+                           float outline_px, int align, const char *s)
+{
+    /* its pixels and outline as font_draw_fancy draws them, times k */
+    float fx = font_pixel(scale), fy = font_pixel_y(scale), px = fx * k, py = fy * k;
+    fancy(x, y, px, py, 0, top, bottom, outline, outline_px * k, grid_w(outline_px) * px / fx,
+          grid_h(outline_px) * py / fy, align, s);
 }

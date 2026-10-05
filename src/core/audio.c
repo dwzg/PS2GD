@@ -108,6 +108,8 @@ static float s_blk[CTRL];
 static int s_song = -1;
 static uint32_t s_gen;
 static int s_paused;
+static int s_suspended;    /* audio_suspend: set by the game thread */
+static int s_silent;       /* the mix has faded out for it and stands still */
 static float s_pos;        /* samples into the arrangement */
 static float s_elapsed;    /* samples since the song started (not wrapped) */
 static int s_seq_idx;
@@ -132,7 +134,7 @@ static uint32_t m_gen;
 /* Command queue (game thread -> audio thread)                         */
 /* ------------------------------------------------------------------ */
 
-enum { CMD_PLAY = 1, CMD_STOP, CMD_SFX, CMD_VOL };
+enum { CMD_PLAY = 1, CMD_STOP, CMD_SFX, CMD_VOL, CMD_OUTPUT };
 
 typedef struct {
     int type, a, b;
@@ -905,6 +907,72 @@ static void sfx_advance(int n)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* The speaker's mix (audio_set_output)                                */
+/* ------------------------------------------------------------------ */
+
+/* A handheld's speakers are small: they play next to nothing below a few
+ * hundred Hz, yet the bass takes most of the music's level, so through them
+ * the music is quiet and the bass only strains them. For them the mix is
+ * high-passed below SPK_HP (4th-order Butterworth, each side) and
+ * compressed (SPK_RATIO above SPK_THRESH, the level followed over a block of
+ * CTRL samples) and brought up by SPK_MAKEUP; the soft clip after it takes
+ * the peaks. */
+#define SPK_HP 250.0f
+#define SPK_THRESH -30.0f  /* dB of full scale */
+#define SPK_RATIO 3.0f
+#define SPK_KNEE 6.0f
+#define SPK_MAKEUP 15.0f   /* dB */
+#define SPK_ATTACK 0.005f  /* s */
+#define SPK_RELEASE 0.2f
+
+typedef struct {
+    float b0, b1, b2, a1, a2, z1, z2;
+} Hp;
+
+static int s_speaker;
+static Hp s_hp[2][2]; /* [side][section] */
+static float s_spk_env, s_spk_gain = 1.0f;
+
+static void hp_set(Hp *f, float q)
+{
+    float w = 2.0f * PI * SPK_HP / SRF, al = sinf(w) / (2.0f * q), c = cosf(w), a0 = 1.0f + al;
+    f->b0 = (1.0f + c) / 2.0f / a0;
+    f->b1 = -(1.0f + c) / a0;
+    f->b2 = f->b0;
+    f->a1 = -2.0f * c / a0;
+    f->a2 = (1.0f - al) / a0;
+    f->z1 = f->z2 = 0.0f;
+}
+
+static void speaker_reset(void)
+{
+    for (int k = 0; k < 2; k++) {
+        hp_set(&s_hp[k][0], 0.5411961f);
+        hp_set(&s_hp[k][1], 1.3065630f);
+    }
+    s_spk_env = 1e-4f;
+    s_spk_gain = 1.0f;
+}
+
+static inline float hp_run(Hp *f, float x)
+{
+    float y = f->b0 * x + f->z1;
+    f->z1 = f->b1 * x - f->a1 * y + f->z2;
+    f->z2 = f->b2 * x - f->a2 * y;
+    return y;
+}
+
+/* The gain for the level followed so far (s_spk_env: mean square). */
+static float speaker_gain(void)
+{
+    float over = 10.0f * log10f(s_spk_env + 1e-10f) - SPK_THRESH, gr;
+    if (over <= -SPK_KNEE / 2) gr = 0.0f;
+    else if (over >= SPK_KNEE / 2) gr = -(1.0f - 1.0f / SPK_RATIO) * over;
+    else gr = -(1.0f - 1.0f / SPK_RATIO) * (over + SPK_KNEE / 2) * (over + SPK_KNEE / 2) / (2.0f * SPK_KNEE);
+    return powf(10.0f, (gr + SPK_MAKEUP) / 20.0f);
+}
+
 static void process_commands(void)
 {
     while (s_qtail != s_qhead) {
@@ -932,6 +1000,10 @@ static void process_commands(void)
             s_music_gain = (c.a / 10.0f) * (c.a / 10.0f);
             s_sfx_gain = (c.b / 10.0f) * (c.b / 10.0f);
             break;
+        case CMD_OUTPUT:
+            if (c.a != s_speaker) speaker_reset();
+            s_speaker = c.a;
+            break;
         }
     }
 }
@@ -946,13 +1018,14 @@ void audio_init(void)
     memset(s_v, 0, sizeof(s_v));
     memset(s_dl, 0, sizeof(s_dl));
     memset(s_dr, 0, sizeof(s_dr));
+    speaker_reset();
     s_ncs = mini(g_song_count, MAX_SONGS);
     for (int i = 0; i < s_ncs; i++) compile_song(i, g_songs[i]);
     s_song = -1;
     m_song = -1;
 }
 
-void audio_mix(int16_t *out, int frames)
+static void mix_frames(int16_t *out, int frames)
 {
     process_commands();
     int done = 0;
@@ -968,6 +1041,8 @@ void audio_mix(int16_t *out, int frames)
             if (s_v[i].on) render_voice(&s_v[i], n);
         s_sc_t += n / SRF;
 
+        /* the speaker's gain goes from the last block's to this one's */
+        float g0 = s_spk_gain, g1 = s_speaker ? speaker_gain() : 1.0f, ms = 0.0f;
         for (int i = 0; i < n; i++) {
             /* ping-pong echo */
             int rp = s_dpos - s_delay_samples;
@@ -978,6 +1053,14 @@ void audio_mix(int16_t *out, int frames)
             s_dpos = (s_dpos + 1) & (DLY_LEN - 1);
             float l = s_bufL[i] + s_bufM[i] + el * 0.55f;
             float r = s_bufR[i] + s_bufM[i] + er * 0.55f;
+            if (s_speaker) {
+                float g = g0 + (g1 - g0) * (float)(i + 1) / (float)n;
+                l = hp_run(&s_hp[0][1], hp_run(&s_hp[0][0], l));
+                r = hp_run(&s_hp[1][1], hp_run(&s_hp[1][0], r));
+                ms += l * l + r * r;
+                l *= g;
+                r *= g;
+            }
             /* soft clip */
             l = clampf(l, -1.5f, 1.5f);
             r = clampf(r, -1.5f, 1.5f);
@@ -987,11 +1070,44 @@ void audio_mix(int16_t *out, int frames)
             out[(done + i) * 2] = (int16_t)clampi(il, -32767, 32767);
             out[(done + i) * 2 + 1] = (int16_t)clampi(ir, -32767, 32767);
         }
+        if (s_speaker) {
+            const float att = 1.0f - expf(-(float)n / (SPK_ATTACK * SRF)),
+                        rel = 1.0f - expf(-(float)n / (SPK_RELEASE * SRF));
+            ms /= 2.0f * n;
+            s_spk_env += (ms > s_spk_env ? att : rel) * (ms - s_spk_env);
+        }
+        s_spk_gain = g1;
         done += n;
     }
     s_pub_elapsed = s_song >= 0 ? s_elapsed : 0.0f;
     mem_barrier();
     s_pub_gen = s_gen;
+}
+
+/* audio_suspend: the sound fades out over this many samples (2.7 ms) and
+ * back in over as many, so that it stops and comes back without a click */
+#define SUSPEND_FADE 128
+
+void audio_mix(int16_t *out, int frames)
+{
+    /* suspended, the mix is silent and nothing advances: the songs, the
+     * sound effects and the echo stay where they faded out, to fade back
+     * in from there */
+    int suspended = s_suspended;
+    if (suspended == s_silent) {
+        if (suspended) memset(out, 0, sizeof(int16_t) * 2 * (size_t)frames);
+        else mix_frames(out, frames);
+        return;
+    }
+    s_silent = suspended;
+    int n = mini(frames, SUSPEND_FADE);
+    mix_frames(out, suspended ? n : frames);
+    for (int i = 0; i < n; i++) {
+        float g = (float)(suspended ? n - i : i) / (float)n;
+        out[i * 2] = (int16_t)((float)out[i * 2] * g);
+        out[i * 2 + 1] = (int16_t)((float)out[i * 2 + 1] * g);
+    }
+    if (suspended) memset(out + n * 2, 0, sizeof(int16_t) * 2 * (size_t)(frames - n));
 }
 
 static uint32_t next_gen(void)
@@ -1043,10 +1159,21 @@ void audio_set_volume(int music, int sfx)
     push_cmd(c);
 }
 
+void audio_set_output(int speaker)
+{
+    Cmd c = {CMD_OUTPUT, speaker != 0, 0, 0.0f, 0};
+    push_cmd(c);
+}
+
 void audio_pause(int paused)
 {
     /* Written directly: a single int flag is safe to share. */
     s_paused = paused;
+}
+
+void audio_suspend(int suspended)
+{
+    s_suspended = suspended != 0;
 }
 
 int audio_current_song(void)

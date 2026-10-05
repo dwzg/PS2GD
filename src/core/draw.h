@@ -11,17 +11,29 @@ void draw_init(void);
  * shown on (0: none, draw anywhere). Builds start with their console's
  * (PIXEL_GRID in common.h: 1 on the PS2, 272/448 on the PSP); the PC build
  * sets its window's scale and pd_tool others for the pictures it draws.
- * Text (font.c), icons (icons.c) and strokes (grid_w) are drawn on whole
- * device pixels: a border 2.4 pixels wide would otherwise come out 2 or 3
- * pixels wide depending on where it lands.
+ * Text (font.c), icons (icons.c) and strokes (grid_w, grid_h) are drawn on
+ * whole device pixels: a border 2.4 pixels wide would otherwise come out 2
+ * or 3 pixels wide depending on where it lands.
+ *
+ * Down the screen the grid can differ from the one across it, where the
+ * virtual screen is stretched to the screen's height (the PS2's PAL
+ * picture shows the 448 virtual lines on 512): draw_set_pixel_grid sets
+ * both, draw_set_pixel_grid_y then the one down the screen alone.
  */
 void draw_set_pixel_grid(float g);
-float draw_pixel_grid(void);
+void draw_set_pixel_grid_y(float g);
+float draw_pixel_grid(void);   /* across */
+float draw_pixel_grid_y(void); /* down */
 /* A stroke width as a whole number of device pixels (at least one) on the
- * grid: it covers that many pixels wherever it lands. Unchanged without. */
+ * grid: it covers that many pixels wherever it lands. Unchanged without.
+ * grid_w for a width across the screen (a vertical line), grid_h for a
+ * height down it (a horizontal one). */
 float grid_w(float w);
-/* v moved onto the nearest device pixel edge on the grid; unchanged without. */
+float grid_h(float h);
+/* v moved onto the nearest device pixel edge on the grid; unchanged without.
+ * grid_snap for an x, grid_snap_y for a y. */
 float grid_snap(float v);
+float grid_snap_y(float v);
 
 void draw_line(float x0, float y0, float x1, float y1, float w, Color c);
 void draw_line2(float x0, float y0, float x1, float y1, float w, Color c0, Color c1);

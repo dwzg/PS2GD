@@ -36,6 +36,12 @@ static void bg_layer(const View *v, float parallax, float tile_w, float min_s, f
     }
 }
 
+void view_snap(View *v)
+{
+    /* view_sy(v, 0) = SCREEN_H + cam_y * B */
+    v->cam_y = (grid_snap(SCREEN_H + v->cam_y * B) - SCREEN_H) / B;
+}
+
 void render_background(const View *v)
 {
     gfx_rect_v(0, 0, SCREEN_W, SCREEN_H, v->pal->bg_top, v->pal->bg_bot);
@@ -68,7 +74,7 @@ static void ground_band(const View *v, float gy, int dir, float alpha)
     /* glowing surface line, fading out over the last `fade` pixels towards
      * each screen edge */
     const float fade = 170.0f;
-    float lw = grid_w(3.0f);
+    float lw = grid_h(3.0f);
     float y0 = dir > 0 ? gy : gy - lw;
     Color lc = col_with_alpha(pal->ground_line, alpha);
     Color lt = col_with_alpha(pal->ground_line, 0.0f);
@@ -146,10 +152,10 @@ void render_spike(float sx, float sy_base, float w, float h, int down, Color fil
     /* dark body that lightens towards the tip, thick bright outline */
     Color top = col_lerp(col_scale(fill, 2.2f), edge, 0.16f);
     gfx_tri(sx, sy_base, fill, sx + w, sy_base, fill, sx + w * 0.5f, tipy, top);
-    float lw = grid_w(3.0f);
+    float lw = grid_w(3.0f), lh = grid_h(3.0f);
     draw_line(sx + 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
     draw_line(sx + w - 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
-    gfx_rect(sx + 1, down ? sy_base : sy_base - lw, sx + w - 1, down ? sy_base + lw : sy_base, edge);
+    gfx_rect(sx + 1, down ? sy_base : sy_base - lh, sx + w - 1, down ? sy_base + lh : sy_base, edge);
 }
 
 void render_saw(float cx, float cy, float r, float angle, Color fill, Color edge)
@@ -266,6 +272,15 @@ void render_coin(float cx, float cy, float r, float spin, float alpha, int ghost
     if (sx > 0.4f) gfx_rect(cx - 2, cy - r * 0.35f, cx + 2, cy + r * 0.35f, col_scale(c, 1.2f));
 }
 
+void render_checkpoint(float cx, float cy)
+{
+    float d = 11.0f;
+    float xy[8] = {cx, cy - d - 3, cx + d + 3, cy, cx, cy + d + 3, cx - d - 3, cy};
+    draw_poly(xy, 4, RGB(0, 40, 10));
+    float xy2[8] = {cx, cy - d, cx + d, cy, cx, cy + d, cx - d, cy};
+    draw_poly(xy2, 4, RGB(90, 255, 120));
+}
+
 static Color orb_color(int t)
 {
     switch (t) {
@@ -364,7 +379,7 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
         }
     }
     /* block edges (they light up on the beat) */
-    const float ew = grid_w(3.0f);
+    const float ew = grid_w(3.0f), eh = grid_h(3.0f);
     Color ec = col_lerp(pal->block_edge, COL_WHITE, 0.45f * v->pulse);
     for (int cy = r0; cy < r1; cy++) {
         for (int cx = c0; cx < c1; cx++) {
@@ -375,8 +390,8 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
             float y1 = view_sy(v, (float)cy), y0 = y1 - B;
             if (t == OBJ_SLAB_LO) y0 = y1 - B * 0.5f;
             else if (t == OBJ_SLAB_HI) y1 = y0 + B * 0.5f;
-            if (e & EDGE_T) gfx_rect(x0, y0, x1, y0 + ew, ec);
-            if (e & EDGE_B) gfx_rect(x0, y1 - ew, x1, y1, ec);
+            if (e & EDGE_T) gfx_rect(x0, y0, x1, y0 + eh, ec);
+            if (e & EDGE_B) gfx_rect(x0, y1 - eh, x1, y1, ec);
             if (e & EDGE_L) gfx_rect(x0, y0, x0 + ew, y1, ec);
             if (e & EDGE_R) gfx_rect(x1 - ew, y0, x1, y1, ec);
         }
@@ -440,13 +455,13 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
 
 void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge)
 {
-    const float r = 10.0f, bw = grid_w(3.0f);
+    const float r = 10.0f, bw = grid_w(3.0f), bh = grid_h(3.0f);
     /* on whole pixels, so the borders come out even */
     if (draw_pixel_grid() > 0.0f) {
         x0 = grid_snap(x0);
-        y0 = grid_snap(y0);
+        y0 = grid_snap_y(y0);
         x1 = grid_snap(x1);
-        y1 = grid_snap(y1);
+        y1 = grid_snap_y(y1);
     } else {
         x0 = floorf(x0 + 0.5f);
         y0 = floorf(y0 + 0.5f);
@@ -467,8 +482,8 @@ void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge
         }
         draw_arc(cxs[k], cys[k], r - bw, r, a0, a0 + PI * 0.5f, edge);
     }
-    gfx_rect(x0 + r, y0, x1 - r, y0 + bw, edge);
-    gfx_rect(x0 + r, y1 - bw, x1 - r, y1, edge);
+    gfx_rect(x0 + r, y0, x1 - r, y0 + bh, edge);
+    gfx_rect(x0 + r, y1 - bh, x1 - r, y1, edge);
     gfx_rect(x0, y0 + r, x0 + bw, y1 - r, edge);
     gfx_rect(x1 - bw, y0 + r, x1, y1 - r, edge);
 }
@@ -477,11 +492,11 @@ void render_progress_bar(float x0, float y0, float x1, float y1, float frac, Col
 {
     frac = clampf(frac, 0.0f, 1.0f);
     x0 = grid_snap(x0); /* on whole pixels, so the frame comes out even */
-    y0 = grid_snap(y0);
+    y0 = grid_snap_y(y0);
     x1 = grid_snap(x1);
-    y1 = grid_snap(y1);
-    float b = grid_w(3.0f);
-    gfx_rect(x0 - b, y0 - b, x1 + b, y1 + b, RGBA(0, 0, 0, 200));
+    y1 = grid_snap_y(y1);
+    float b = grid_w(3.0f), bh = grid_h(3.0f);
+    gfx_rect(x0 - b, y0 - bh, x1 + b, y1 + bh, RGBA(0, 0, 0, 200));
     gfx_rect(x0, y0, x1, y1, RGBA(255, 255, 255, 40));
     if (frac > 0.0f) {
         float xm = x0 + (x1 - x0) * frac;

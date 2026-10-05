@@ -22,6 +22,9 @@ extern const Color g_player_colors[PLAYER_COLOR_COUNT];
 #define ICON_COUNT 8
 extern const char *const g_icon_names[ICON_COUNT];
 
+/* The colour of a difficulty (0 easy .. 5 demon) in the level select. */
+Color difficulty_color(int d);
+
 /* Gameplay object colors. */
 #define COL_ORB_YELLOW RGB(255, 226, 40)
 #define COL_ORB_PINK RGB(255, 84, 200)

@@ -28,6 +28,7 @@ void save_defaults(SaveData *s)
     s->col2 = 1;
     s->music_vol = 8;
     s->sfx_vol = 8;
+    s->speaker = AUDIO_OUTPUT_AUTO ? OUTPUT_AUTO : OUTPUT_HEADPHONES;
 }
 
 int save_load(SaveData *s)

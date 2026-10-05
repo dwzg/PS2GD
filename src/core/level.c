@@ -118,8 +118,31 @@ static void parse_header(const char *const *src, Level *L)
     }
 }
 
+/* A platform's target.h may define LEVEL_PREBUILT and have the built-in
+ * levels (and the title's demo run) parsed at build time (the GBA, where
+ * parsing one takes four frames): level_prebuilt(src) gives src's level,
+ * or NULL to parse it here; level_parse returns it as it is (level_free
+ * leaves it be: level_is_prebuilt), and level_info reads its header. */
+#ifdef LEVEL_PREBUILT
+const Level *level_prebuilt(const char *const *src);
+int level_is_prebuilt(const Level *L);
+#endif
+
 void level_info(int index, LevelInfo *out)
 {
+#ifdef LEVEL_PREBUILT
+    const Level *pre = level_prebuilt(g_levels[index].src);
+    if (pre) {
+        memset(out, 0, sizeof(*out));
+        memcpy(out->name, pre->name, sizeof(out->name));
+        out->difficulty = pre->difficulty;
+        out->stars = pre->stars;
+        out->song = pre->song;
+        out->pal = pre->start_pal;
+        out->ncoins = pre->ncoins;
+        return;
+    }
+#endif
     Level tmp;
     memset(&tmp, 0, sizeof(tmp));
     tmp.start_speed = 1;
@@ -142,6 +165,12 @@ void level_info(int index, LevelInfo *out)
 
 Level *level_parse(const char *const *src)
 {
+#ifdef LEVEL_PREBUILT
+    {
+        const Level *pre = level_prebuilt(src);
+        if (pre) return (Level *)pre; /* (never written to: the core only reads a level) */
+    }
+#endif
     static Section sec[MAX_SECTIONS];
     Level *L = (Level *)calloc(1, sizeof(Level));
     if (!L) return NULL;
@@ -180,13 +209,18 @@ Level *level_parse(const char *const *src)
     int x0 = 0, n = 0, coin_index = 0;
     for (int s = 0; s < nsec; s++) {
         const Section *S = &sec[s];
+        /* the lines' lengths once, not for every column (slow on the
+         * consoles with long levels) */
+        enum { MAX_LENS = 64 };
+        static int lens[MAX_LENS];
+        for (int k = 0; k < S->count && k < MAX_LENS; k++) lens[k] = (int)strlen(src[S->first + k]) - 1;
         for (int c = 0; c < S->width; c++) {
             int gx = x0 + c;
             L->col_start[gx] = n;
             int row = S->rows; /* row counter from the top */
             for (int k = 0; k < S->count; k++) {
                 const char *ln = src[S->first + k];
-                int len = (int)strlen(ln) - 1;
+                int len = k < MAX_LENS ? lens[k] : (int)strlen(ln) - 1;
                 char ch = c < len ? ln[1 + c] : ' ';
                 if (ln[0] == '!') {
                     if (ch >= '0' && ch <= '9' && L->ntrig < LEVEL_MAX_TRIGGERS) {
@@ -257,6 +291,9 @@ Level *level_parse(const char *const *src)
 void level_free(Level *L)
 {
     if (!L) return;
+#ifdef LEVEL_PREBUILT
+    if (level_is_prebuilt(L)) return;
+#endif
     free(L->grid);
     free(L->edges);
     free(L->objs);

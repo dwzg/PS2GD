@@ -11,6 +11,13 @@
 #define TARGET_NAME "PLAYSTATION 2"
 #define BTN_NAME_L "L1"
 #define BTN_NAME_R "R1"
-#define PIXEL_GRID 1.0f /* the GS draws the virtual screen 1:1 */
+/* the GS draws the virtual screen 1:1 in NTSC; in PAL it is stretched to
+ * 512 lines, and gfx_gskit.c sets the grid down the screen to that */
+#define PIXEL_GRID 1.0f
+/* the options' FLICKER FILTER row, in the PS2 build alone (the PC build
+ * that plays this layout has no interlaced picture to filter) */
+#ifdef PS2
+#define FLICKER_OPTION 1
+#endif
 
 #endif

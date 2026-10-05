@@ -18,11 +18,31 @@ static const uint8_t MAGIC_1[4] = {'P', 'D', 'G', '1'};
 #define V1_LEVELS 6
 #define V1_SIZE (V1_LEVELS * 5)
 
-static uint8_t checksum(const uint8_t *p, uint16_t n)
+/* s = 0x5a, then for each byte s = (s rotated left by 1) ^ byte; in
+ * assembly (every death saves, during play) */
+static uint8_t checksum(const uint8_t *p, uint16_t n) __naked
 {
-    uint8_t s = 0x5a;
-    while (n--) s = (uint8_t)((s << 1 | s >> 7) ^ *p++);
-    return s;
+    p;
+    n;
+    __asm
+    ld l, #0x5a
+1$:
+    ld a, b
+    or a, c
+    jr z, 2$
+    ld a, l
+    rlca
+    ld l, a
+    ld a, (de)
+    inc de
+    xor a, l
+    ld l, a
+    dec bc
+    jr 1$
+2$:
+    ld a, l
+    ret
+    __endasm;
 }
 
 static void defaults(void)

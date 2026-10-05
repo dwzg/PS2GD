@@ -14,16 +14,16 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 OUT := build/psp$(if $(filter 1,$(PERF)),-perf)
 include sources.mk
-SRC := $(CORE_SRC) $(wildcard src/psp/*.c)
+SRC := $(CORE_SRC) $(VECTOR_SRC) $(wildcard src/psp/*.c)
 OBJS := $(patsubst src/%.c,$(OUT)/%.o,$(SRC))
 
 CC := psp-gcc
 CFLAGS := -O2 -G0 -g -std=gnu99 -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion \
-          -DPD_PSP -D_PSP_FW_VERSION=600 -Isrc/psp -I$(PSPSDK)/include -I$(PSPDEV)/psp/include \
+          -DPD_PSP -DGFX_GLOW -D_PSP_FW_VERSION=600 -Isrc/psp -I$(PSPSDK)/include -I$(PSPDEV)/psp/include \
           $(if $(filter 1,$(PERF)),-DPD_PERF)
 LDFLAGS := -L$(PSPSDK)/lib -L$(PSPDEV)/psp/lib -specs=$(PSPSDK)/lib/prxspecs \
            -Wl,-q,-T$(PSPSDK)/lib/linkfile.prx -Wl,-zmax-page-size=128
-LIBS := -lpspgu -lpspaudio -lpsppower -lpspdisplay -lpspge -lpspctrl -lm
+LIBS := -lpspgu -lpspaudio -lpsppower -lpspdisplay -lpspge -lpspctrl -lpsphprm -lm
 
 all: $(OUT)/EBOOT.PBP
 

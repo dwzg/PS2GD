@@ -14,22 +14,23 @@
  */
 typedef struct {
     float cx, cy, s, co, si, fy;
-    float grid; /* > 0: round offsets to this many device pixels per virtual one */
+    float grid, grid_y; /* > 0: round offsets to this many device pixels per virtual one */
 } Xf;
 
 static Xf xf_make(float cx, float cy, float s, float angle, int flip)
 {
-    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f};
+    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f, 0.0f};
     float g = draw_pixel_grid();
     if (g > 0.0f) {
         t.cx = grid_snap(cx);
-        t.cy = grid_snap(cy);
+        t.cy = grid_snap_y(cy);
         float q = floorf(angle / (PI * 0.5f) + 0.5f); /* nearest quarter turn */
         if (fabsf(angle - q * (PI * 0.5f)) < 0.06f) {
             int k = ((int)q % 4 + 4) % 4;
             t.co = k == 0 ? 1.0f : (k == 2 ? -1.0f : 0.0f);
             t.si = k == 1 ? 1.0f : (k == 3 ? -1.0f : 0.0f);
             t.grid = g;
+            t.grid_y = draw_pixel_grid_y();
         }
     }
     return t;
@@ -41,7 +42,7 @@ static void xf_pt(const Xf *t, float lx, float ly, float *ox, float *oy)
     float dx = (lx * t->co - ly * t->si) * t->s, dy = (lx * t->si + ly * t->co) * t->s;
     if (t->grid > 0.0f) {
         dx = roundf(dx * t->grid) / t->grid;
-        dy = roundf(dy * t->grid) / t->grid;
+        dy = roundf(dy * t->grid_y) / t->grid_y;
     }
     *ox = t->cx + dx;
     *oy = t->cy + dy;
@@ -177,7 +178,7 @@ void icon_draw_ball(float cx, float cy, float size, float angle, int icon, Color
 {
     const Color k = RGB(8, 8, 12);
     cx = grid_snap(cx); /* the circles below sit on a device pixel too */
-    cy = grid_snap(cy);
+    cy = grid_snap_y(cy);
     Xf t = xf_make(cx, cy, size, angle, 0);
     draw_circle(cx, cy, size * 0.49f, k);
     draw_circle(cx, cy, size * 0.42f, c1);

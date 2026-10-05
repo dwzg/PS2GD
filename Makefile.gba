@@ -1,0 +1,94 @@
+# Game Boy Advance build (needs arm-none-eabi-gcc with newlib, gbafix, and
+# the host tools' dependencies for gba_tool; scripts/build-gba.sh fetches
+# gbafix and runs this).
+#   make -f Makefile.gba                 -> build/gba/pulsedash.gba (and its ELF file,
+#                                           which build/host/gba_test reads)
+#   make -f Makefile.gba VERSION=v1.3.0  -> version shown on the title screen
+#
+# The game is the shared core (CORE_SRC in sources.mk: the menus, the play,
+# the title's demo run, the physics, the levels) and the GBA's own
+# presentation in src/gba. gba_tool (src/host/gba_tool.c, built by
+# Makefile.host) makes the ROM's graphics with the core's renderer and its
+# songs and sounds with the core's synthesizer, into build/gba/gen.
+
+PREFIX ?= arm-none-eabi-
+GBA_CC := $(PREFIX)gcc
+OBJCOPY := $(PREFIX)objcopy
+GBAFIX ?= build/gbafix/gbafix
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+OUT := build/gba
+GEN := build/gba/gen
+TOOL := build/host/gba_tool
+ROM := $(OUT)/pulsedash.gba
+ELF := $(OUT)/pulsedash.elf
+
+include sources.mk
+SRC := $(CORE_SRC) $(wildcard src/gba/*.c)
+HDR := $(wildcard src/core/*.h) $(wildcard src/gba/*.h)
+OBJS := $(OUT)/gba/crt0.o $(patsubst src/%.c,$(OUT)/%.o,$(SRC)) $(OUT)/gen/data.o $(OUT)/gen/gen.o
+# what gba_tool reads
+DATA_SRC := $(wildcard src/core/*.c) $(wildcard src/core/*.h) $(wildcard src/levels/*.c) \
+            src/host/gba_tool.c $(wildcard src/host/gba_*.c) $(wildcard src/host/gba_*.h)
+
+ARCH := -mcpu=arm7tdmi -mtune=arm7tdmi -mthumb-interwork
+# (no loops turned into calls to memset and memcpy: newlib's run from the
+# ROM, slower than the loops for the short runs the drawing has)
+GBA_CFLAGS := $(ARCH) -mthumb -O2 -g -std=gnu99 -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion \
+          -fno-tree-loop-distribute-patterns -ffunction-sections -fdata-sections \
+          -Isrc/gba -Isrc/core -I$(GEN)
+# the physics runs from IWRAM (gba.ld), as ARM code (and the particles,
+# fx_gba.c, marked IWRAM_CODE; fx.c is left out: FX_TARGET)
+ARM_OBJS := $(OUT)/core/sim.o
+GBA_LDFLAGS := $(ARCH) -mthumb -nostartfiles -specs=nosys.specs -T src/gba/gba.ld \
+           -Wl,--gc-sections -Wl,-Map,$(OUT)/pulsedash.map -Wl,--no-warn-rwx-segments
+LIBS := -lm -lc -lgcc
+
+all: $(ROM)
+
+$(TOOL): FORCE
+	$(MAKE) -f Makefile.host $(TOOL)
+
+$(GEN)/stamp: $(TOOL) $(DATA_SRC)
+	@rm -rf $(GEN)
+	@mkdir -p $(GEN)
+	$(TOOL) export $(GEN)
+	@touch $@
+
+$(OUT)/%.o: src/%.c $(HDR) $(GEN)/stamp
+	@mkdir -p $(dir $@)
+	$(GBA_CC) $(GBA_CFLAGS) -c $< -o $@
+
+$(ARM_OBJS): GBA_CFLAGS := $(filter-out -mthumb,$(GBA_CFLAGS)) -marm
+
+$(OUT)/gba/crt0.o: src/gba/crt0.s
+	@mkdir -p $(dir $@)
+	$(GBA_CC) $(ARCH) -c $< -o $@
+
+# the generated graphics and sound (data.s takes the big blobs in with
+# .incbin; gen.c has the tables that describe them)
+$(OUT)/gen/data.o: $(GEN)/stamp
+	@mkdir -p $(dir $@)
+	$(GBA_CC) $(ARCH) -c $(GEN)/data.s -o $@ -Wa,-I$(GEN)
+
+$(OUT)/gen/gen.o: $(GEN)/stamp
+	@mkdir -p $(dir $@)
+	$(GBA_CC) $(GBA_CFLAGS) -c $(GEN)/gen.c -o $@
+
+# the version is compiled into one small object, rebuilt every time
+$(OUT)/core/version.o: GBA_CFLAGS += -DPD_VERSION=\"$(VERSION)\"
+$(OUT)/core/version.o: FORCE
+
+$(ELF): $(OBJS) src/gba/gba.ld
+	$(GBA_CC) $(GBA_LDFLAGS) $(OBJS) $(LIBS) -o $@
+
+$(ROM): $(ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(GBAFIX) $@ > /dev/null
+	@echo "built: $@"
+
+clean:
+	rm -rf build/gba build/gba-perf
+
+.PHONY: all clean FORCE
+FORCE:

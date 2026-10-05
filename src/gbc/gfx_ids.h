@@ -70,5 +70,8 @@
 #define OPAL_PLAYER 0 /* -, primary, secondary, black */
 #define OPAL_FX 1     /* -, primary, white, secondary */
 #define OPAL_CHECK 2  /* -, green, white, dark green */
+#define OPAL_COL1 3   /* -, the player's primary colour, lighter, white: a death's particles */
+#define OPAL_COL2 4   /* the same in its secondary colour */
+#define OPAL_WHITE 5  /* -, white, white, white */
 
 #endif

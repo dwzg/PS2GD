@@ -18,9 +18,14 @@ typedef struct {
     uint8_t icon, col1, col2;
     uint8_t music_vol, sfx_vol;
     int8_t audio_delay; /* extra sound delay set in the options, 10 ms units */
-    uint8_t reserved[2];
+    uint8_t speaker;    /* the options' OUTPUT (AUDIO_OUTPUT_OPTION): OUTPUT_* */
+    uint8_t flicker;    /* the options' FLICKER FILTER (FLICKER_OPTION): on (0 in older saves: off) */
     uint32_t checksum;
 } SaveData;
+
+/* SaveData.speaker: the sound for headphones, for the console's speakers,
+ * or picked by whether headphones are plugged in (AUDIO_OUTPUT_AUTO) */
+enum { OUTPUT_HEADPHONES = 0, OUTPUT_SPEAKER = 1, OUTPUT_AUTO = 2 };
 
 void save_defaults(SaveData *s);
 /* Returns 1 if a valid save was loaded, 0 if defaults were used. */

@@ -52,12 +52,17 @@ void frame_wait(void);
 
 /* --- video.c --- */
 /* The progress bar row: background row 0 is shown unscrolled, the rest
- * scrolled by g_scx (switched by the LY=7 interrupt). */
-extern volatile uint8_t g_scx;
+ * scrolled by g_scx and g_scy (switched by the LY=7 interrupt; g_scy only
+ * shakes the screen, 0..2, and map row 18 is ground for it). */
+extern volatile uint8_t g_scx, g_scy;
 extern uint8_t g_hud_split;
 /* The title: lines 0..79 show the window's map (the logo and the menu)
  * unscrolled, the rest the level (LYC must be 79). */
 extern uint8_t g_title_split;
+/* LCDC bits to set and to clear in the next vertical blank (video_vblank):
+ * the window shown once all of it is drawn, from a frame's first line (set
+ * while the LCD draws, it starts part-way down the screen). */
+extern uint8_t g_lcdc_on, g_lcdc_off;
 
 void video_init(void);
 /* The title logo (in the tiles' ROM bank) at row y of the background's
@@ -73,18 +78,29 @@ void video_flush(void);
 void video_on(void);
 void bkg_clear(void);
 
-/* Palettes to upload in the next vblank (RGB555, 8 background and 3
+/* Palettes to upload in the next vblank (RGB555, 8 background and 6
  * sprite palettes of 4), g_pal_dirty bit 0 / bit 1 when they changed, bit
  * 2 when only the beat's flash colours changed (palette.c). */
 extern uint16_t g_bgpal[32];
-extern uint16_t g_objpal[12];
+extern uint16_t g_objpal[24];
+/* During a level (g_sky_on), the sky's bands from top to bottom: the
+ * background palettes' colour 0 (but the ground's and the bar's) changes
+ * to each in an interrupt at its first line. Uploaded with g_bgpal. */
+extern uint16_t g_skypal[SKY_BANDS];
+extern uint8_t g_sky_on;
 extern uint8_t g_pal_dirty;
+/* the level's palettes this far to white (0..32, palette.c): a death's flash */
+extern uint8_t g_pal_white;
 
 /* --- palette.c --- */
 void pal_init(void) BANKED;
 /* pal_level() blends two level palettes (t of 256), adds the beat's flash
  * (0..16, white) and dims everything by fade (0 black .. 8 full). */
 void pal_level(uint8_t from, uint8_t to, uint8_t t, uint8_t flash, uint8_t fade) BANKED;
+/* With g_pal_split, a palette change's start is set up on one call and
+ * shown on the next (g_pal_pending until then): during play, where each
+ * half fits a busy frame better. */
+extern uint8_t g_pal_split, g_pal_pending;
 void pal_menu(uint8_t fade) BANKED;
 /* every background palette black (video_blank) */
 void pal_black(void) BANKED;

@@ -13,12 +13,13 @@ static void center_win(uint8_t y, const char *s)
     text_win((uint8_t)((20 - strlen(s)) / 2), y, s, PAL_TEXT);
 }
 
-/* The window from screen line y down, cleared: rows of 8 lines. */
+/* The window from screen line y down, cleared: rows of 8 lines. Left
+ * hidden: drawing it takes more than a frame, and play.c shows it in a
+ * vertical blank once all is drawn (g_lcdc_on). */
 static void overlay(uint8_t y, uint8_t rows)
 {
     fill_win(0, 0, 20, rows, UT_BLANK, PAL_TEXT | 0x08);
     WY_REG = y;
-    SHOW_WIN;
 }
 
 void ui_ground(uint8_t width) BANKED
@@ -28,6 +29,7 @@ void ui_ground(uint8_t width) BANKED
         uint8_t sep = (x & 3) == 0;
         tile_bkg(x, 16, T_GROUND_TOP + sep, PAL_GROUND);
         tile_bkg(x, 17, T_GROUND_LOW + sep, PAL_GROUND);
+        tile_bkg(x, 18, T_GROUND_LOW + sep, PAL_GROUND); /* (shown when the screen shakes) */
     }
 }
 
@@ -95,6 +97,7 @@ void ui_new_best(uint8_t pc, uint8_t x) BANKED
     sky_text(x, 2, buf);
 }
 
+/* (when the level begins: a pause only shows it) */
 void ui_pause(uint8_t practice) BANKED
 {
     overlay(48, 12);

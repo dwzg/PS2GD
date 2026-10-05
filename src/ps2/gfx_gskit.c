@@ -4,6 +4,8 @@
 
 #include "ps2_platform.h"
 #include "../core/gfx.h"
+#include "../core/draw.h"
+#include "../core/platform.h"
 
 static GSGLOBAL *s_gs;
 static float s_sx = 1.0f, s_sy = 1.0f;
@@ -38,6 +40,11 @@ int gfx_ps2_init(void)
 
     s_sx = (float)s_gs->Width / SCREEN_W;
     s_sy = (float)s_gs->Height / SCREEN_H;
+    /* text, icons and outlines on whole pixels of the picture: in PAL its
+     * 512 lines show the virtual screen's 448, a virtual pixel is 8/7 of a
+     * line tall (draw.h) */
+    draw_set_pixel_grid(s_sx);
+    draw_set_pixel_grid_y(s_sy);
     return 0;
 }
 
@@ -65,12 +72,53 @@ void gfx_ps2_submit(void)
     gsKit_queue_exec(s_gs);
 }
 
+/*
+ * The flicker filter (the options' FLICKER FILTER, off unless chosen): the
+ * display's two read circuits show the frame one line apart, blended, so
+ * each line of the interlaced picture mixes two of the frame's, and an
+ * edge or a line one pixel tall no longer shows in one field and not the
+ * other. Set up as ps2sdk's libgraph sets up its own (graph_set_mode with
+ * the flicker filter, graph_set_screen, graph_set_framebuffer_filtered,
+ * graph_enable_output): circuit 1 reads the frame from its first line,
+ * circuit 2 from its second and one line less of it (nothing past the
+ * frame's end), and the merge circuit blends them, circuit 1 at a fixed
+ * alpha of 0x70. It costs no drawing: the merge circuit does it as it
+ * reads the frame out. Off, the registers are as gsKit_init_screen left
+ * them (circuit 2 alone, the frame's full height) and the flip writes what
+ * it always did.
+ */
+static int s_filter, s_filter_shown;
+
+void plat_flicker_filter(int on)
+{
+    s_filter = on != 0; /* from the next flip */
+}
+
+static void set_merge(int filter)
+{
+    int dx = s_gs->StartX + s_gs->StartXOffset, dy = s_gs->StartY + s_gs->StartYOffset;
+    if (filter) {
+        GS_SET_DISPLAY2(dx, dy, s_gs->MagH, s_gs->MagV, s_gs->DW - 1, s_gs->DH - 2);
+        GS_SET_PMODE(1, 1, 1, 0, 0, 0x70);
+    } else {
+        GS_SET_PMODE(0, 1, 0, 1, 0, 0x80);
+        GS_SET_DISPLAY2(dx, dy, s_gs->MagH, s_gs->MagV, s_gs->DW - 1, s_gs->DH - 1);
+    }
+}
+
 void gfx_ps2_flip(void)
 {
     /* gsKit_sync_flip() without its busy-wait for the vblank: the caller has
      * already slept until one started */
     gsKit_finish();
-    GS_SET_DISPFB2(s_gs->ScreenBuffer[s_gs->ActiveBuffer & 1] / 8192, s_gs->Width / 64, s_gs->PSM, 0, 0);
+    unsigned fbp = s_gs->ScreenBuffer[s_gs->ActiveBuffer & 1] / 8192, fbw = s_gs->Width / 64;
+    int change = s_filter != s_filter_shown;
+    s_filter_shown = s_filter;
+    /* circuit 1 off before circuit 2 moves back; on once both read the frame */
+    if (change && !s_filter_shown) set_merge(0);
+    if (s_filter_shown) GS_SET_DISPFB1(fbp, fbw, s_gs->PSM, 0, 0);
+    GS_SET_DISPFB2(fbp, fbw, s_gs->PSM, 0, s_filter_shown);
+    if (change && s_filter_shown) set_merge(1);
     s_gs->ActiveBuffer ^= 1;
     gsKit_setactive(s_gs);
 }

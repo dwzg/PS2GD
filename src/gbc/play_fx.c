@@ -11,7 +11,13 @@
 
 static int16_t s_part_x[NPART], s_part_y[NPART]; /* 1/16 px, screen */
 static int8_t s_part_vx[NPART], s_part_vy[NPART];
-static uint8_t s_part_t;
+static uint8_t s_part_t, s_part_n, s_part_death;
+/* a death: its burst starts the frame after (the physics ran in this one) */
+static uint8_t s_death_wait;
+static int16_t s_death_x, s_death_y;
+/* and the screen shakes and flashes white: frames left */
+static uint8_t s_shake_t, s_white_t;
+int8_t s_shake_dx;
 static int16_t s_trail_x[TRAIL]; /* world px */
 static uint8_t s_trail_y[TRAIL], s_trail_n, s_trail_i;
 static int16_t s_ring_x;
@@ -27,9 +33,38 @@ static const uint8_t SMOOTH[49] = {0,   0,   1,   3,   5,   8,   11,  15,  19,  
 static const uint16_t SHIP_TILT[4][3] = {
     {321, 983, 1711}, {401, 1229, 2139}, {502, 1536, 2674}, {602, 1843, 3208}};
 
-/* death burst directions (1/16 px a frame) */
+/* the fireworks' directions (1/16 px a frame) */
 static const int8_t PART_VX[NPART] = {40, 28, 0, -28, -40, -28, 0, 28};
 static const int8_t PART_VY[NPART] = {0, -28, -40, -28, 0, 28, 40, 28};
+
+/* A death's burst, as the other versions': 22 particles in the player's
+ * two colours (sprite palettes 3 and 4) and white sparks, every way at
+ * their own speeds, slowing down, for 0.35 to 0.6 s. As s_dp starts
+ * (below): x, y 0.5 (the death's pixel goes in at the start), velocities
+ * in 1/256 px a frame (the table's in 1/24 px). */
+#define DP(vx, vy) {0x80, 0, 0x80, 0, (uint8_t)((vx) * 24), (uint8_t)(((vx) * 24) >> 8), (uint8_t)((vy) * 24), \
+                    (uint8_t)(((vy) * 24) >> 8)}
+static const uint8_t DEATH_START[NPART_MAX][8] = {
+    DP(-12, -21), DP(22, -26), DP(16, 1),  DP(-19, -2), DP(-6, -30), DP(9, -14),  DP(-11, 9),  DP(-15, -11),
+    DP(-14, -15), DP(-4, 14),  DP(-31, 1), DP(-14, 5),  DP(11, 11),  DP(-19, 22), DP(-6, 17),  DP(29, 2),
+    DP(2, 34),    DP(17, 15),  DP(24, -17), DP(22, 20), DP(0, -18),  DP(31, -10),
+};
+/* ... and for each, its frames, the frame it turns small (and lighter;
+ * white sparks are small throughout), its sprite (byte in OAM) and palette */
+#define DI(frames, pal, k) {frames, (pal) == OPAL_WHITE ? 0 : (frames) - 10, \
+                            ((k) < NPART ? OAM_PART + (k) : OAM_PART2 + (k) - NPART) * 4, (pal) | 0x08}
+static const uint8_t DEATH_INFO[NPART_MAX][4] = {
+    DI(27, OPAL_COL1, 0),  DI(22, OPAL_WHITE, 1),  DI(36, OPAL_COL2, 2),  DI(27, OPAL_COL1, 3),
+    DI(25, OPAL_WHITE, 4), DI(24, OPAL_COL2, 5),   DI(34, OPAL_COL1, 6),  DI(21, OPAL_WHITE, 7),
+    DI(33, OPAL_COL2, 8),  DI(33, OPAL_COL1, 9),   DI(26, OPAL_WHITE, 10), DI(35, OPAL_COL2, 11),
+    DI(30, OPAL_COL1, 12), DI(26, OPAL_WHITE, 13), DI(31, OPAL_COL2, 14), DI(36, OPAL_COL1, 15),
+    DI(29, OPAL_WHITE, 16), DI(31, OPAL_COL2, 17), DI(27, OPAL_COL1, 18), DI(27, OPAL_WHITE, 19),
+    DI(28, OPAL_COL1, 20), DI(24, OPAL_WHITE, 21),
+};
+/* the shake, about the other versions' (a few pixels at first, 0.35 s):
+ * steps of SCX (-1..1) and SCY (0..2) times the shake's size */
+static const int8_t SHAKE_X[8] = {1, -1, 0, 1, -1, 0, -1, 1};
+static const uint8_t SHAKE_Y[8] = {2, 0, 1, 0, 2, 1, 0, 2};
 
 /* where the level's percentage reaches k (progress.h), and what it is now */
 static uint32_t s_pc_x[101];
@@ -74,8 +109,20 @@ void hud_update(void) BANKED
     s_pc = s_pc_now;
 }
 
-void palettes(void) BANKED
+void palettes(uint8_t left) BANKED
 {
+    /* a palette change (blending or fading) takes up to 44 scanlines,
+     * the beat's flash alone 15 (play.c): otherwise it waits a frame */
+    if (left < 50 && (s_pal_dirty || s_pal_t < 48 || s_white_t || (s_demo && s_demo_t >= 359) ||
+                      (s_trig < L->ntrig && (gs_p.x >> 16) >= L->trig[s_trig].x)))
+        return;
+    /* a death's white flash: a quarter of the way to white, gone in a
+     * quarter of a second (the other versions' white overlay) */
+    if (s_white_t) {
+        s_white_t--;
+        g_pal_white = s_white_t >> 1;
+        s_pal_dirty = 1;
+    }
     /* the title goes through the level palettes, 6 s each (as the other
      * versions' does) */
     if (s_demo && ++s_demo_t >= 360) {
@@ -109,8 +156,11 @@ void palettes(void) BANKED
     }
     s_beat = 0;
     if (s_pal_dirty) {
+        g_pal_split = 1;
+        g_pal_pending = 0;
         pal_level(s_pal_from, s_pal_to, SMOOTH[s_pal_t], s_flash, s_fade);
-        s_pal_dirty = 0;
+        g_pal_split = 0;
+        s_pal_dirty = g_pal_pending;
     }
 }
 
@@ -136,7 +186,8 @@ void draw_player(void) BANKED
     uint8_t tile, prop = OPAL_PLAYER | 0x08, f;
     int8_t g = gs_p.grav;
     int16_t vy = gs_p.vy;
-    if (g_phase == PH_DEAD || (g_phase == PH_RESPAWN && s_t < 8)) {
+    /* (on the frame it died, until its burst starts) */
+    if ((g_phase == PH_DEAD && s_death_wait < 2) || (g_phase == PH_RESPAWN && s_t < 8)) {
         hide_sprite(OAM_PLAYER);
         hide_sprite(OAM_PLAYER + 1);
         return;
@@ -222,12 +273,205 @@ void draw_checkpoints(void) BANKED
     for (; n < NCHECK; n++) hide_sprite(OAM_CHECK + n);
 }
 
+/* A death's particles: x, y (8.8 screen pixels) and their speeds */
+static uint8_t s_dp[NPART_MAX][8];
+static uint8_t s_dp_n, s_dp_ox, s_dp_oy, s_dp_left, s_dp_px;
+static const uint8_t *s_dp_at;
+
+static void death_start(void)
+{
+    uint8_t i, *p = &s_dp[0][1];
+    uint8_t x = (uint8_t)(s_death_x - 1), y = (uint8_t)(s_death_y - 1);
+    memcpy(s_dp, DEATH_START, sizeof(s_dp));
+    for (i = 0; i < NPART_MAX; i++, p += 8) {
+        p[0] = x;
+        p[2] = y;
+    }
+    s_part_t = 0;
+    s_part_death = 1;
+    fx_ring(s_death_x + s_cam, (uint8_t)s_death_y);
+    s_shake_t = 20;
+    s_white_t = 16;
+}
+
+/* Frame s_part_t of a death's particles, into the sprites: each slows
+ * down (by an eighth every other frame), and turns small and light before
+ * it goes. In assembly: 22 sprites in SDCC's C took 60 scanlines. */
+static void death_parts(void) __naked
+{
+    __asm
+    ld a, (_s_shake_dx) ; (the sprites shake with the screen)
+    ld b, a
+    ld a, #8
+    sub a, b
+    ld (_s_dp_ox), a
+    ld a, (_g_scy)
+    ld b, a
+    ld a, #16
+    sub a, b
+    ld (_s_dp_oy), a
+    xor a, a
+    ld (_s_dp_left), a
+    ld a, #22 ; NPART_MAX
+    ld (_s_dp_n), a
+    ld hl, #_DEATH_INFO
+    ld a, l
+    ld (_s_dp_at), a
+    ld a, h
+    ld (_s_dp_at + 1), a
+    ld de, #_s_dp
+1$:
+    ld hl, #_s_dp_at
+    ld a, (hl+)
+    ld h, (hl)
+    ld l, a
+    ld a, (_s_part_t)
+    ld b, a
+    ld a, (hl) ; its frames
+    cp a, b
+    jr z, 8$
+    jr c, 9$
+    ld a, #1
+    ld (_s_dp_left), a
+    bit 0, b
+    jr z, 3$
+    ld h, d
+    ld l, e
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+    call death_drag ; vx
+    call death_drag ; vy
+3$:
+    push de
+    ld h, d
+    ld l, e
+    ld bc, #4
+    add hl, bc
+    ld a, (hl+)
+    ld c, a
+    ld a, (hl+)
+    ld b, a
+    ld a, (de) ; x += vx
+    add a, c
+    ld (de), a
+    inc de
+    ld a, (de)
+    adc a, b
+    ld (de), a
+    ld (_s_dp_px), a
+    inc de
+    ld a, (hl+)
+    ld c, a
+    ld b, (hl)
+    ld a, (de) ; y += vy
+    add a, c
+    ld (de), a
+    inc de
+    ld a, (de)
+    adc a, b
+    ld (de), a
+    ld c, a
+    ld hl, #_s_dp_at
+    ld a, (hl+)
+    ld h, (hl)
+    ld l, a
+    inc hl
+    ld a, (_s_part_t)
+    cp a, (hl)
+    ld b, #220 ; ST_PART
+    jr c, 4$
+    ld b, #222 ; ST_PART_SM
+4$:
+    inc hl
+    ld a, (hl+)
+    ld e, a
+    ld a, (hl)
+    ld h, #>_shadow_OAM
+    ld l, e
+    ld e, a
+    ld a, (_s_dp_oy)
+    add a, c
+    ld (hl+), a
+    ld a, (_s_dp_ox)
+    ld c, a
+    ld a, (_s_dp_px)
+    add a, c
+    ld (hl+), a
+    ld a, b
+    ld (hl+), a
+    ld (hl), e
+    pop de
+    jr 9$
+8$:
+    inc hl ; its last frame: hidden
+    inc hl
+    ld a, (hl)
+    ld l, a
+    ld h, #>_shadow_OAM
+    ld (hl), #0
+9$:
+    ld hl, #8
+    add hl, de
+    ld d, h
+    ld e, l
+    ld hl, #_s_dp_at
+    ld a, (hl)
+    add a, #4
+    ld (hl+), a
+    jr nc, 10$
+    inc (hl)
+10$:
+    ld a, (_s_dp_n)
+    dec a
+    ld (_s_dp_n), a
+    jp nz, 1$
+    ret
+death_drag: ; (hl) -= (hl) >> 3, 16 bits; hl += 2
+    ld a, (hl+)
+    ld c, a
+    ld a, (hl-)
+    ld b, a
+    sra b
+    rr c
+    sra b
+    rr c
+    sra b
+    rr c
+    ld a, (hl)
+    sub a, c
+    ld (hl+), a
+    ld a, (hl)
+    sbc a, b
+    ld (hl+), a
+    ret
+    __endasm;
+}
+
+static void draw_death(void)
+{
+    s_part_t++;
+    death_parts();
+    if (!s_dp_left) s_part_death = 0;
+}
+
 void draw_effects(void) BANKED
 {
     uint8_t i;
-    if (s_part_t) {
+    /* (not after a restart from the pause menu) */
+    if (s_death_wait && !--s_death_wait && g_phase == PH_DEAD) death_start();
+    if (s_shake_t) {
+        uint8_t k = s_shake_t & 7, a = s_shake_t > 12 ? 2 : 1;
+        s_shake_t--;
+        s_shake_dx = s_shake_t ? (int8_t)(SHAKE_X[k] * a) : 0;
+        g_scy = s_shake_t ? (uint8_t)((SHAKE_Y[k] * a) >> 1) : 0;
+    }
+    if (s_part_death) {
+        draw_death();
+    } else if (s_part_t) {
         s_part_t--;
-        for (i = 0; i < NPART; i++) {
+        for (i = 0; i < s_part_n; i++) {
             s_part_x[i] += s_part_vx[i];
             s_part_y[i] += s_part_vy[i];
             if (s_part_t) {
@@ -241,7 +485,8 @@ void draw_effects(void) BANKED
     }
     if (s_ring_t) {
         s_ring_t--;
-        put16(OAM_RING, s_ring_t > 4 ? ST_RING : ST_RING + 4, s_ring_x - s_cam, s_ring_y, OPAL_FX | 0x08);
+        put16(OAM_RING, s_ring_t > 4 ? ST_RING : ST_RING + 4, s_ring_x - s_cam - s_shake_dx, s_ring_y - g_scy,
+              OPAL_FX | 0x08);
         if (!s_ring_t) {
             hide_sprite(OAM_RING);
             hide_sprite(OAM_RING + 1);
@@ -258,6 +503,7 @@ void burst(int16_t sx, int16_t sy, uint8_t frames) BANKED
         s_part_vx[i] = PART_VX[i];
         s_part_vy[i] = PART_VY[i];
     }
+    s_part_n = NPART;
     s_part_t = frames;
 }
 
@@ -265,9 +511,16 @@ void hide_all_sprites(void) BANKED
 {
     uint8_t i;
     for (i = 0; i < 40; i++) hide_sprite(i);
-    s_part_t = s_ring_t = 0;
+    s_part_t = s_ring_t = s_part_death = s_death_wait = 0;
     s_trail_n = 0;
     s_trail_shown = 0;
+    s_shake_t = s_white_t = 0;
+    s_shake_dx = 0;
+    g_scy = 0;
+    if (g_pal_white) {
+        g_pal_white = 0;
+        s_pal_dirty = 1;
+    }
 }
 
 static uint8_t level_pc(void)
@@ -276,14 +529,25 @@ static uint8_t level_pc(void)
     return s_pc_now;
 }
 
+/* The run died on this tick: the sound now; the burst, the shake and the
+ * flash from the next frame, and what the attempt counts for (death_count)
+ * from the one after (this frame ran the physics, and together they took
+ * longer than a frame). */
 void on_death(void) BANKED
 {
-    uint8_t pc = level_pc();
-    int16_t sx = px_of(gs_p.x) - s_cam, sy = py_of(gs_p.y);
     sfx_play(SFX_DEATH);
-    burst(sx, sy, 30);
+    s_death_x = px_of(gs_p.x) - s_cam;
+    s_death_y = py_of(gs_p.y);
+    s_death_wait = 2;
     g_phase = PH_DEAD;
     s_t = 0;
+    if (!s_practice) music_stop();
+}
+
+/* The attempt's progress, saved, and a new best shown. */
+void death_count(void) BANKED
+{
+    uint8_t pc = level_pc();
     s_ticks_total += gs_p.ticks;
     s_jumps_total += gs_p.jumps;
     s_new_best = progress_death(&g_save.progress, L->id, s_practice, pc, gs_p.jumps);
@@ -291,7 +555,6 @@ void on_death(void) BANKED
     /* over the level, centred on the screen (the camera stays put until
      * the respawn draws the level anew) */
     if (s_new_best) ui_new_best(s_new_best, (uint8_t)col_of(s_cam + 36));
-    if (!s_practice) music_stop();
 }
 
 void on_complete(void) BANKED

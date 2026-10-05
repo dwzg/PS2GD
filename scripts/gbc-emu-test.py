@@ -12,11 +12,15 @@ frame slows the game and its music down by a frame).
 needs: pip install pyboy (2.x), and build/gbc/pulsedash.gbc
 (scripts/build-gbc.sh), build/host/gbc_tool. Exits non-zero if a level
 isn't finished, the player differs from the reference's on any tick, its
-results are drawn more than once, the screen goes white between screens
-(the LCD off), or (unless --allow-late) frames took too long. --perf plays
-the PERF=1 build
-(build/gbc-perf) instead and prints how many scanlines each part of a
-frame took (its timers make it slower: late frames are expected there).
+results are drawn more than once, the music's beats fall on other ticks of
+the run after a pause (the first level, played again with one), the screen
+shows anything but the run and then the whole pause menu (from the next
+frame) or results, or the sky's first band in another colour, or it goes
+white between screens (the LCD off), or (unless --allow-late) frames took
+too long, in the levels or around six deaths in the first. --perf plays the
+PERF=1 build (build/gbc-perf) instead and prints how many scanlines each
+part of a frame took (its timers make it slower: late frames are expected
+there).
 """
 import argparse
 import io
@@ -24,13 +28,14 @@ import os
 import subprocess
 import sys
 
+import numpy
 from pyboy import PyBoy
 
 ROM = "build/gbc/pulsedash.gbc"
 ROM_PERF = "build/gbc-perf/pulsedash.gbc"
 TOOL = "build/host/gbc_tool"
 SCR_TITLE, SCR_SELECT, SCR_PLAY, SCR_GARAGE = 1, 2, 3, 4
-J_A = 0x10
+J_A, J_START = 0x10, 0x80
 PH_RUN, PH_DEAD, PH_RESPAWN, PH_COMPLETE = 0, 1, 2, 3
 # the timings of a PERF=1 build (src/gbc/gbc.h, src/gbc/gbsim.c), in scanlines
 PERF = ["frame", "sim", "music", "stream", "hud", "pal", "sprites"]
@@ -317,6 +322,50 @@ def bar_after_restart(g, level_id):
                                                                      "shows %s, not %s" % (shown, want))
 
 
+def deaths_on_time(g, level_id, n=6):
+    """Die n times in the first level, spread through it (the solver's presses, then the wrong ones): no frame
+    runs late from the run through the death's effects to the next attempt (a death's frame ran the physics too;
+    what it counts for, the burst, the shake and the flash come in the frames after)."""
+    script = os.path.join("build", "gbc", "script%d.txt" % level_id)
+    subprocess.run([TOOL, "script", str(level_id), script], check=True, stdout=subprocess.DEVNULL)
+    held, finish = load_script(script)
+    die_at = [finish * k // (n + 1) for k in range(1, n + 1)]
+    st = {"deaths": 0, "dead": False, "vbl": None, "late": []}
+
+    def on_input(_):
+        vbl = g.u8("_g_vbl_count")
+        if st["vbl"] is not None and (vbl - st["vbl"]) & 255 > 1:
+            st["late"].append(st["deaths"])
+        st["vbl"] = vbl
+        ph = g.u8("_g_phase")
+        if ph == PH_DEAD and not st["dead"]:
+            st["deaths"] += 1
+        st["dead"] = ph != PH_RUN
+        t = g.u16("_gs_p", OFF_TICKS)
+        k = st["deaths"]
+        g.m[g.sym["_g_test_keys"]] = J_A if k < n and held.get(t, False) != (t >= die_at[k]) else 0
+    g.tick(10)
+    g.press("a")
+    if not g.wait_screen(SCR_PLAY):
+        return False, "level did not start"
+    while g.u8("_g_phase") != PH_RUN:
+        g.tick()
+    g.pb.hook_register(0, g.sym["_input_update"], on_input, None)
+    for _ in range(finish * (n + 2)):
+        g.tick()
+        if st["deaths"] >= n and g.u8("_g_phase") == PH_RUN:
+            break
+    g.pb.hook_deregister(0, g.sym["_input_update"])
+    g.m[g.sym["_g_test_keys"]] = 0xFF
+    g.press("start")
+    g.tick(5)
+    g.press("b")
+    g.wait_screen(SCR_SELECT)
+    ok = st["deaths"] >= n and not st["late"]
+    return ok, "%d deaths, %s" % (st["deaths"], "no frame late" if not st["late"] else
+                                   "%d frames late (after deaths %s)" % (len(st["late"]), st["late"][:8]))
+
+
 def held_start(g):
     """The A that starts a level, still held, doesn't jump; then quit it."""
     g.tick(10)
@@ -333,8 +382,11 @@ def held_start(g):
     return g.wait_screen(SCR_SELECT) and jumps == 0
 
 
-def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, perf=None, allow_late=False, delay=0):
-    """level: its number on the Game Boy (the select screen's order), level_id: the game's"""
+def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, perf=None, allow_late=False, delay=0,
+               pause_at=None, beats=None):
+    """level: its number on the Game Boy (the select screen's order), level_id: the game's; pause_at: the run's
+    tick to pause on, for a moment, then resume with A; beats: a list for the run's tick at each of the music's
+    beats"""
     g = game
     if not g.wait_screen(SCR_SELECT):
         return False, "no level select"
@@ -352,6 +404,10 @@ def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, 
     # for it (a frame's work can run past the emulator's frame boundary)
     late = []
     differs = []
+    paused = [0]  # frames since the pause; past PAUSE_FRAMES: resumed
+    paused_shots = []  # each frame from the pause to the first after the resume, and where its sprites can be
+    resumed = 0  # frames since A was read to resume
+    boxes = None
 
     def on_input(_):
         if perf is not None and g.u8("_g_phase") == PH_RUN:
@@ -362,7 +418,15 @@ def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, 
         if t in ref and not differs and g.player() != ref[t]:
             differs.append("after tick %d the ROM has x, y, vy, mode, gravity %s, the reference %s" %
                            (t, g.player(), ref[t]))
-        g.m[g.sym["_g_test_keys"]] = J_A if held.get(t, False) else 0
+        # (the music ticks first in a frame, then the game reads the pad)
+        if beats is not None and g.u8("_music_beat"):
+            beats.append(t)
+        keys = J_A if held.get(t, False) else 0
+        if t == pause_at and paused[0] <= PAUSE_FRAMES:
+            # Start on this tick, then A a moment later (it doesn't jump)
+            keys = J_START if paused[0] == 0 else J_A if paused[0] == PAUSE_FRAMES else 0
+            paused[0] += 1
+        g.m[g.sym["_g_test_keys"]] = keys
 
     g.pb.hook_register(0, g.sym["_input_update"], on_input, None)
     for _ in range(finish * 3 + 600):
@@ -370,6 +434,10 @@ def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, 
         if shots and every and t % every == 0 and g.u8("_g_phase") == PH_RUN:
             g.shot(os.path.join(shots, "level%d_t%05d.png" % (level, t)))
         g.tick()
+        resumed += paused[0] > PAUSE_FRAMES
+        if paused[0] and resumed <= 2:
+            paused_shots.append((g.pb.screen.ndarray.copy(), boxes))
+            boxes = sprite_boxes(g)
         if g.u8("_g_snap", OFF_DEAD) or g.u8("_g_snap", OFF_DONE):
             break
     g.pb.hook_deregister(0, g.sym["_input_update"])
@@ -391,24 +459,130 @@ def play_level(game, level, level_id, nlevels, held, finish, ref, shots, every, 
     if late:
         info += " (ticks %s%s)" % (" ".join(map(str, late[:12])), " ..." if len(late) > 12 else "")
     info += "; " + (differs[0] if differs else "the same as the reference on every tick")
+    torn = pause_at is not None and pause_shown(paused_shots)
+    if torn:
+        info += "; WHILE PAUSED, " + torn
     if not save_ok:
         info += "; SAVED best %d%%, coins %s (the run's %s), attempts %d" % (saved[0], bin(saved[1]), bin(run_coins),
                                                                             saved[2])
     # the results come up after a moment, drawn once (the fireworks go on
-    # round every 256 frames)
+    # round every 256 frames), and whole
     results = []
     a = g.sym["_ui_results"]
     g.pb.hook_register(a >> 16, a & 0xFFFF, lambda _: results.append(1), None)
-    g.tick(100)
+    shown = []  # from the frame before the one they are drawn in: each frame, and where its sprites can be
+    prev, boxes = None, sprite_boxes(g)
+    for _ in range(100):
+        g.tick()
+        cur = (g.pb.screen.ndarray.copy(), boxes)
+        boxes = sprite_boxes(g)
+        if results and len(shown) < RESULTS_FRAMES:
+            shown += [cur] if shown else [prev, cur]
+        prev = cur
     if shots:
         g.shot(os.path.join(shots, "level%d_complete.png" % level))
     g.tick(240)
     g.pb.hook_deregister(a >> 16, a & 0xFFFF)
     if len(results) != 1:
         info += "; RESULTS DRAWN %d TIMES" % len(results)
+    torn_results = results_shown(shown, g.m[0xFF4A]) if results else ""
+    if torn_results:
+        info += "; THE RESULTS " + torn_results
     g.press("a")
     g.wait_screen(SCR_SELECT)
-    return ticks == finish and not differs and save_ok and len(results) == 1 and (allow_late or not late), info
+    return (ticks == finish and not differs and save_ok and len(results) == 1 and (allow_late or not late)
+            and not torn and not torn_results), info
+
+
+PAUSE_FRAMES = 30
+RESULTS_FRAMES = 16
+
+
+def sky_top(img):
+    """the main colour of screen lines 8..21, under the progress bar: the sky's first band"""
+    c, n = numpy.unique(img[8:22, :, :3].reshape(-1, 3), axis=0, return_counts=True)
+    return tuple(c[n.argmax()])
+
+
+def sprite_boxes(g):
+    """where the sprites can be in the next frame (8x16 each; the OAM after a frame is the next one's)"""
+    box = numpy.zeros((144, 160), bool)
+    if g.m[0xFF40] & 2:
+        for k in range(40):
+            y, x = g.m[0xFE00 + 4 * k] - 16, g.m[0xFE01 + 4 * k] - 8
+            box[max(y, 0):max(y + 16, 0), max(x, 0):max(x + 8, 0)] = True
+    return box
+
+
+def pause_shown(shots):
+    """From the frame Start is read in (it still shows the tick before the last) to the first after the resume
+    (shots: each frame, and where its sprites can be): the run as it stopped, the whole menu from the next frame
+    on (it was drawn when the level began), and the run as it stopped again, nothing between (a part-drawn menu,
+    the sprites hidden part-way down), and the sky's first band in its colour in every frame. What went wrong,
+    or ""."""
+    if len(shots) < PAUSE_FRAMES + 2:
+        return "NO RESUME"
+    if same_below(*shots[-2], *shots[1], 0):
+        return "NO MENU (BUT FOR THE SPRITES, THE RUN AS IT STOPPED)"
+    shots = [img for img, _ in shots]
+    sky, run, menu = sky_top(shots[0]), shots[1], shots[-2]
+    for i, img in enumerate(shots[1:], 1):
+        if sky_top(img) != sky:
+            return "FRAME %d SHOWED THE SKY'S FIRST BAND IN ANOTHER COLOUR" % i
+        if i in (1, len(shots) - 1):
+            if not (img == run).all():
+                return "FRAME %d SHOWED OTHER THAN THE RUN AS IT STOPPED" % i
+        elif not (img == menu).all():
+            return "FRAME %d SHOWED OTHER THAN THE WHOLE MENU" % i
+    return ""
+
+
+def same_below(a, a_boxes, b, b_boxes, wy, dx=0):
+    """Lines wy.. of a are b's scrolled dx pixels on, but where sprites can be."""
+    w = 160 - dx
+    return not ((a[wy:, :w] != b[wy:, dx:]).any(axis=2) & ~(a_boxes[wy:, :w] | b_boxes[wy:, dx:])).any()
+
+
+def results_shown(shown, wy):
+    """From the frame before the results are drawn (shown: each frame, and where its sprites can be): the run
+    while they are drawn (below line wy as in the frame they start in, but for the sprites and the camera's last
+    steps), then the results whole (below line wy as in the last frame, but for the sprites), nothing between,
+    and the sky's first band in its colour in every frame. What went wrong, or ""."""
+    if len(shown) < RESULTS_FRAMES:
+        return "NOT SHOWN"
+    sky, (run, run_boxes), (last, last_boxes) = sky_top(shown[0][0]), shown[1], shown[-1]
+    up = 0
+    for i, (img, boxes) in enumerate(shown[1:], 1):
+        if sky_top(img) != sky:
+            return "SHOWED THE SKY'S FIRST BAND IN ANOTHER COLOUR (FRAME %d)" % i
+        if not up and any(same_below(img, boxes, run, run_boxes, wy, dx) for dx in range(8)):
+            continue
+        up = up or i
+        if not same_below(img, boxes, last, last_boxes, wy):
+            return "SHOWED PART-DRAWN (FRAME %d)" % i
+    return "" if up else "NOT SHOWN"
+
+
+def pause_tick(held, finish):
+    """a tick a third of the way in with no press near it"""
+    t = finish // 3
+    while any(held.get(k, False) for k in range(t - 8, t + 9)):
+        t += 1
+    return t
+
+
+def pause_sync(beats, paused_beats, pause_at):
+    """The music's beats fall on the same ticks of the run with a pause as without one: the run and its song
+    stop and go on together."""
+    after = [b for b in beats if b > pause_at]
+    paused_after = [b for b in paused_beats if b > pause_at]
+    if not after:
+        return False, "no beat after tick %d" % pause_at
+    if beats != paused_beats:
+        off = [p - b for b, p in zip(after, paused_after) if p != b]
+        return False, "after a pause at tick %d the beats fall %s tick(s) off the run's (%d beats after it, %d with the " \
+            "pause)" % (pause_at, off[0] if off else "?", len(after), len(paused_after))
+    return True, "the %d beats after a pause at tick %d on the same ticks of the run as without it" % (len(after), pause_at)
 
 
 def main():
@@ -456,6 +630,10 @@ def main():
     ok, info = bar_after_restart(game, ids[0])
     print("progress bar after a restart: %s (%s)" % ("ok" if ok else "FAIL", info))
     fails += not ok
+    ok, info = deaths_on_time(game, ids[0])
+    print("deaths: %s (%s)" % ("ok" if ok else "FAIL", info))
+    fails += not ok and not (args.allow_late or args.perf)
+    first = True
     for level in map(int, args.levels.split(",")) if args.levels else range(len(ids)):
         script = os.path.join("build", "gbc", "script%d.txt" % ids[level])
         subprocess.run([TOOL, "script", str(ids[level]), script], check=True, stdout=subprocess.DEVNULL)
@@ -465,13 +643,26 @@ def main():
             game.tick(10)
             game.shot(os.path.join(args.shots, "select%d.png" % level))
         perf = Perf() if args.perf else None
+        beats = []
         ok, info = play_level(game, level, ids[level], len(ids), held, finish, ref, args.shots, args.every, perf,
-                              args.allow_late or args.perf, args.delay)
+                              args.allow_late or args.perf, args.delay, beats=beats)
         print("level %d: %s %s" % (ids[level], "ok" if ok else "FAIL", info))
         if perf:
             perf.report(level, args.perf_csv)
         sys.stdout.flush()
         fails += not ok
+        if first and ok:
+            # the first level again, paused a third of the way in
+            first = False
+            paused_beats = []
+            at = pause_tick(held, finish)
+            ok, info = play_level(game, level, ids[level], len(ids), held, finish, ref, "", 0, None,
+                                  args.allow_late or args.perf, args.delay, pause_at=at, beats=paused_beats)
+            if ok:
+                ok, info = pause_sync(beats, paused_beats, at)
+            print("level %d with a pause: %s (%s)" % (ids[level], "ok" if ok else "FAIL", info))
+            sys.stdout.flush()
+            fails += not ok
     # screens change in black, the LCD on: off, a Game Boy Color's is white
     print("screen changes: %s" % ("black, the LCD on throughout" if not game.lcd_off else
                                   "FAIL, the LCD was off (white) for %d frames" % game.lcd_off))

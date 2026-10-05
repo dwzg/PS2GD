@@ -14,6 +14,7 @@ static SDL_Vertex s_v[MAX_VERTS];
 static int s_n;
 static int s_blend = BLEND_ALPHA;
 static GfxStats s_stats;
+static void (*s_warp)(float *x, float *y);
 
 void gfx_sdl_begin(SDL_Renderer *r, float scale_x, float scale_y)
 {
@@ -31,6 +32,11 @@ void gfx_sdl_offset(float dx, float dy)
 {
     s_ox = dx;
     s_oy = dy;
+}
+
+void gfx_sdl_warp(void (*fn)(float *x, float *y))
+{
+    s_warp = fn;
 }
 
 const GfxStats *gfx_sdl_stats(void)
@@ -52,6 +58,7 @@ static inline void put(float x, float y, Color c)
     SDL_Vertex *v = &s_v[s_n++];
     v->position.x = (x + s_ox) * s_sx;
     v->position.y = (y + s_oy) * s_sy;
+    if (s_warp) s_warp(&v->position.x, &v->position.y);
     if (draw_pixel_grid() > 0.0f) {
         /* a sixteenth of a pixel, like the PSP's GE: shapes put on whole
          * pixels stay whole (SDL's software renderer cuts a pixel off a

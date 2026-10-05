@@ -13,8 +13,6 @@
 #include "audio.h"
 #include "fx.h"
 
-#define DEMO_CAM_DROP 1.2f /* the menu covers the top of the screen: show the run lower */
-
 /* 8 bars of the menu song (112 BPM) at normal speed, 5.625 blocks a beat
  * (`pd_tool ruler demo` shows the grid). The first 14 columns stay empty:
  * the run wraps there, from x = DEMO_WRAP back to x = 8. */
@@ -129,44 +127,84 @@ static int s_main_held, s_broken;
 /* Snapshots of the run every SNAP_EVERY blocks of the first time round, so
  * that following the music to a new place replays a few blocks rather than
  * the level up to there. */
+#ifdef DEMO_SNAP_EVERY
+#define SNAP_EVERY DEMO_SNAP_EVERY
+#else
 #define SNAP_EVERY 15
+#endif
 #define NSNAP (DEMO_LOOP / SNAP_EVERY)
 #define AHEAD_TICKS 24 /* background run's ticks per frame */
-typedef struct {
-    Player p;
-    float last_x;
-    int held, valid;
-} DemoSnap;
 static DemoSnap s_snap[NSNAP];
 static Player s_ahead;
 static float s_ahead_last_x;
 static int s_ahead_held, s_ahead_on;
+static int s_snaps_done; /* all of them made (the run ahead got to the end, or demo_take_snapshots) */
 
 /* Is the button down at x? A press the player stepped over entirely since
- * the last tick (when the run was nudged forward) still counts. */
-static int demo_button(float x, float last_x)
+ * the last tick (when the run was nudged forward) still counts. In the
+ * player's fixed point (no float comparisons for the platforms without
+ * an FPU): SIM_ONE is a power of two, so x >= x0 in blocks exactly when
+ * x >= ceil(x0 * SIM_ONE) in fixed point, and the same for x < x1. */
+static int demo_button(int32_t x, int32_t last_x)
 {
-    for (int i = 0; i < NPRESS; i++) {
-        const DemoPress *d = &DEMO_PRESSES[i];
-        if ((x >= d->x0 && x < d->x1) || (last_x < d->x0 && x >= d->x1)) return 1;
+    static int32_t t[NPRESS][2];
+    static int ready;
+    if (!ready) {
+        for (int i = 0; i < NPRESS; i++) {
+            t[i][0] = (int32_t)ceilf(DEMO_PRESSES[i].x0 * (float)SIM_ONE);
+            t[i][1] = (int32_t)ceilf(DEMO_PRESSES[i].x1 * (float)SIM_ONE);
+        }
+        ready = 1;
     }
+    for (int i = 0; i < NPRESS; i++)
+        if ((x >= t[i][0] && x < t[i][1]) || (last_x < t[i][0] && x >= t[i][1])) return 1;
     return 0;
 }
 
-static void step(Runner *r, const Level *L)
+/* a tick of a run, and the snapshot (into snap[0..n), one every `every`
+ * blocks) of a place it has just come to the first time */
+static void step_into(Runner *r, const Level *L, DemoSnap *snap, int n, int every)
 {
-    int h = demo_button(sim_x(r->p), r->last_x);
+    /* (last_x is a whole number of fixed-point steps: sim_x's, moved by
+     * whole blocks) */
+    int h = demo_button(r->p->x, (int32_t)(r->last_x * (float)SIM_ONE));
     r->last_x = sim_x(r->p);
     sim_tick(r->p, L, h, h && !r->held);
     r->held = h;
-    int k = (int)floorf(sim_x(r->p) / SNAP_EVERY);
-    if (k >= 0 && k < NSNAP && !s_snap[k].valid && floorf(r->last_x / SNAP_EVERY) < k && !r->p->dead) {
-        DemoSnap *sn = &s_snap[k];
+    int k = (int)floorf(sim_x(r->p) / every);
+    if (k >= 0 && k < n && !snap[k].valid && floorf(r->last_x / every) < k && !r->p->dead) {
+        DemoSnap *sn = &snap[k];
         sn->p = *r->p;
         sn->last_x = r->last_x;
         sn->held = r->held;
         sn->valid = 1;
     }
+}
+
+static void step(Runner *r, const Level *L)
+{
+    step_into(r, L, s_snap, NSNAP, SNAP_EVERY);
+}
+
+void demo_record(DemoSnap *snap, int n, int every)
+{
+    Level *L = level_parse(demo_level_src());
+    Player p;
+    Runner r = {&p, 0.0f, 0};
+    memset(snap, 0, (size_t)n * sizeof(*snap));
+    if (!L) return;
+    /* (as the run ahead in demo_tick) */
+    sim_reset(&p, L);
+    r.last_x = sim_x(&p);
+    while (sim_x(&p) < DEMO_LOOP && !p.dead) step_into(&r, L, snap, n, every);
+    level_free(L);
+}
+
+void demo_take_snapshots(const DemoSnap *snap, int n)
+{
+    if (n != NSNAP) return;
+    memcpy(s_snap, snap, sizeof(s_snap));
+    s_snaps_done = 1;
 }
 
 /* Where the player is on the loop (in [DEMO_WRAP - DEMO_LOOP, DEMO_WRAP))
@@ -229,7 +267,8 @@ int demo_tick(PlayState *ps, const float *beat)
         sim_reset(&s_ahead, ps->L);
         s_ahead_last_x = sim_x(&s_ahead);
         s_ahead_held = 0;
-        s_ahead_on = 1;
+        /* (the snapshots stay made from the title's earlier showings) */
+        s_ahead_on = !s_snaps_done;
         seek(ps, beat ? x_of_beat(*beat) : 0.0f);
     }
     if (s_ahead_on) {
@@ -238,6 +277,7 @@ int demo_tick(PlayState *ps, const float *beat)
         s_ahead_last_x = r.last_x;
         s_ahead_held = r.held;
         s_ahead_on = sim_x(&s_ahead) < DEMO_LOOP && !s_ahead.dead;
+        s_snaps_done = !s_ahead_on;
     }
     play_begin_tick(ps);
     if (beat) {
@@ -259,23 +299,6 @@ int demo_tick(PlayState *ps, const float *beat)
         return 1;
     }
     return 0;
-}
-
-void demo_render(const PlayState *ps, const Palette *pal)
-{
-    if (!ps->L) {
-        draw_menu_backdrop(pal, g_game.t * 6.0f, beat_pulse());
-        return;
-    }
-    View v;
-    play_view(ps, &v);
-    v.cam_y += DEMO_CAM_DROP;
-    v.pal = pal;
-    render_background(&v);
-    render_ground(&v, 0.0f, CORRIDOR_H, 0.0f);
-    render_level(&v, ps->L, &ps->p, 0);
-    play_draw_player(ps, &v);
-    fx_draw(FX_WORLD, v.cam_x, v.cam_y, (1.0f - g_game.alpha) * TICK_DT);
 }
 
 void demo_free(PlayState *ps)

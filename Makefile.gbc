@@ -21,6 +21,7 @@ ROM := $(OUT)/pulsedash.gbc
 TOOL := build/host/gbc_tool
 
 SRC := $(wildcard src/gbc/*.c)
+ASM := $(wildcard src/gbc/*.s)
 HDR := $(wildcard src/gbc/*.h)
 # what gbc_tool reads
 DATA_SRC := $(wildcard src/levels/*.c) src/core/songs.c src/core/theme.c src/core/font.c src/host/gbc_tool.c
@@ -54,8 +55,8 @@ $(OUT)/%.o: src/core/%.c $(wildcard src/core/*.h)
 	@mkdir -p $(OUT)
 	$(LCC) $(LCCFLAGS) -Wf-bo15 -c -o $@ $<
 
-$(ROM): $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(SHARED_OBJ) $(HDR) $(GEN)/stamp
-	$(LCC) $(LCCFLAGS) -o $@ $(filter-out src/gbc/gbsim.c,$(SRC)) $(OUT)/gbsim.o $(SHARED_OBJ) $(GEN)/*.c
+$(ROM): $(filter-out src/gbc/gbsim.c,$(SRC)) $(ASM) $(OUT)/gbsim.o $(SHARED_OBJ) $(HDR) $(GEN)/stamp
+	$(LCC) $(LCCFLAGS) -o $@ $(filter-out src/gbc/gbsim.c,$(SRC)) $(ASM) $(OUT)/gbsim.o $(SHARED_OBJ) $(GEN)/*.c
 	@echo "built: $@"
 
 clean:
