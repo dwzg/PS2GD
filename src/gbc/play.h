@@ -21,7 +21,9 @@ enum { PH_RUN = 0, PH_DEAD, PH_RESPAWN, PH_COMPLETE };
 #define OAM_TRAIL 10
 #define OAM_CHECK 20
 #define OAM_RING 24
+#define OAM_PART2 26 /* a death's particles past the first NPART, to 39 */
 #define NPART 8
+#define NPART_MAX 22
 #define NCHECK 4
 
 typedef struct {
@@ -41,6 +43,8 @@ extern Snap s_cp[MAX_CP];
 /* the camera's x (world pixels), the player's turn and the ship's tilt */
 extern int16_t s_cam;
 extern uint16_t s_rot;
+/* the screen's shake after a death, added to the scroll (play_fx.c) */
+extern int8_t s_shake_dx;
 extern int8_t s_ship_f;
 /* palettes: triggers passed, the change under way, the beat's flash, the
  * fade, whether to rebuild them, a beat to flash */
@@ -61,7 +65,8 @@ static int16_t col_of(int16_t px) { return (int16_t)((px + 256) >> 3) - 32; } /*
 /* play_fx.c */
 void hud_thresholds(void) BANKED;
 void hud_update(void) BANKED;
-void palettes(void) BANKED;
+/* the palettes' work for this frame, if it fits in the scanlines left */
+void palettes(uint8_t left) BANKED;
 void draw_player(void) BANKED;
 void draw_trail(void) BANKED;
 void draw_checkpoints(void) BANKED;
@@ -69,6 +74,7 @@ void draw_effects(void) BANKED;
 void burst(int16_t sx, int16_t sy, uint8_t frames) BANKED;
 void hide_all_sprites(void) BANKED;
 void on_death(void) BANKED;
+void death_count(void) BANKED;
 void on_complete(void) BANKED;
 void finish_exit(void) BANKED;
 void fx_ring(int16_t x, uint8_t y) BANKED;

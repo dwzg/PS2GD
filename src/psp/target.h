@@ -15,5 +15,10 @@
 /* device pixels per virtual pixel, across and down: the 790 virtual pixels
  * across come to 479.6 of the LCD's 480 */
 #define PIXEL_GRID (272.0f / SCREEN_H)
+/* the options' OUTPUT: the synth's mix for headphones, or for the PSP's
+ * own small speakers (audio.c: the bass cut, compressed) */
+#define AUDIO_OUTPUT_OPTION 1
+/* and AUTO: headphones plugged in or not (main_psp.c, sceHprm) */
+#define AUDIO_OUTPUT_AUTO 1
 
 #endif

@@ -48,6 +48,18 @@ void audio_sfx(int id);
 void audio_set_volume(int music_0_10, int sfx_0_10);
 /* Freeze the music (sound effects keep playing). */
 void audio_pause(int paused);
+/* Silence everything, music and sound effects, where it is, while the
+ * system has a menu over the game (game_suspend; the PSP's HOME dialog),
+ * and let it go on from there. The sound fades out and back in over a few
+ * milliseconds, and a song held by audio_pause stays held. (The synth's
+ * alone: the core doesn't call it, so audio of a platform's own needn't
+ * have it.) */
+void audio_suspend(int suspended);
+/* The sound for headphones and other speakers (0, as it is) or for a
+ * handheld's own small speakers (1: the options' OUTPUT, where a target
+ * asks for it, AUDIO_OUTPUT_OPTION): the bass they can't play cut, and
+ * compressed, louder. */
+void audio_set_output(int speaker);
 
 /* Position of the current song that is being heard, in seconds and beats. */
 float audio_song_time(void);

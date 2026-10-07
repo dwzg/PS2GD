@@ -14,11 +14,16 @@ void draw_init(void)
     }
 }
 
-static float s_grid = PIXEL_GRID;
+static float s_grid = PIXEL_GRID, s_grid_y = PIXEL_GRID;
 
 void draw_set_pixel_grid(float g)
 {
-    s_grid = g;
+    s_grid = s_grid_y = g;
+}
+
+void draw_set_pixel_grid_y(float g)
+{
+    s_grid_y = g;
 }
 
 float draw_pixel_grid(void)
@@ -26,20 +31,46 @@ float draw_pixel_grid(void)
     return s_grid;
 }
 
+float draw_pixel_grid_y(void)
+{
+    return s_grid_y;
+}
+
+static float stroke(float w, float grid)
+{
+    if (grid <= 0.0f) return w;
+    float n = floorf(w * grid + 0.5f);
+    return (n < 1.0f ? 1.0f : n) / grid;
+}
+
 float grid_w(float w)
 {
-    if (s_grid <= 0.0f) return w;
-    float n = floorf(w * s_grid + 0.5f);
-    return (n < 1.0f ? 1.0f : n) / s_grid;
+    return stroke(w, s_grid);
+}
+
+float grid_h(float h)
+{
+    return stroke(h, s_grid_y);
 }
 
 /* A sixty-fourth of a pixel past the edge: rounding errors stay on that side
- * of it, so renderers that truncate positions (SDL's software one) or round
- * them to a sixteenth of a pixel (the PSP's) put the edge right on it. */
+ * of it, so renderers that truncate positions (SDL's software one, the
+ * PS2's gsKit to a sixteenth of a pixel) or round them to a sixteenth (the
+ * PSP's) put the edge right on it. */
+static float snap(float v, float grid)
+{
+    if (grid <= 0.0f) return v;
+    return (floorf(v * grid + 0.5f) + 1.0f / 64.0f) / grid;
+}
+
 float grid_snap(float v)
 {
-    if (s_grid <= 0.0f) return v;
-    return (floorf(v * s_grid + 0.5f) + 1.0f / 64.0f) / s_grid;
+    return snap(v, s_grid);
+}
+
+float grid_snap_y(float v)
+{
+    return snap(v, s_grid_y);
 }
 
 /* Pick a step through the circle table based on on-screen radius. */
@@ -53,8 +84,9 @@ static int seg_step(float r)
 
 void draw_line2(float x0, float y0, float x1, float y1, float w, Color c0, Color c1)
 {
-    w = grid_w(w);
     float dx = x1 - x0, dy = y1 - y0;
+    /* on the grid of the way it is thick, mostly: down for a flat line */
+    w = fabsf(dx) >= fabsf(dy) ? grid_h(w) : grid_w(w);
     float len = sqrtf(dx * dx + dy * dy);
     if (len < 0.0001f) return;
     float nx = -dy / len * w * 0.5f, ny = dx / len * w * 0.5f;
@@ -70,11 +102,12 @@ void draw_line(float x0, float y0, float x1, float y1, float w, Color c)
 
 void draw_rect_outline(float x0, float y0, float x1, float y1, float w, Color c)
 {
+    float h = grid_h(w);
     w = grid_w(w);
-    gfx_rect(x0, y0, x1, y0 + w, c);
-    gfx_rect(x0, y1 - w, x1, y1, c);
-    gfx_rect(x0, y0 + w, x0 + w, y1 - w, c);
-    gfx_rect(x1 - w, y0 + w, x1, y1 - w, c);
+    gfx_rect(x0, y0, x1, y0 + h, c);
+    gfx_rect(x0, y1 - h, x1, y1, c);
+    gfx_rect(x0, y0 + h, x0 + w, y1 - h, c);
+    gfx_rect(x1 - w, y0 + h, x1, y1 - h, c);
 }
 
 void draw_circle_grad(float cx, float cy, float r, Color inner, Color outer)
@@ -163,7 +196,10 @@ void draw_ellipse_ring(float cx, float cy, float rx, float ry, float thick, Colo
 void draw_glow(float cx, float cy, float r, Color c)
 {
     gfx_blend(BLEND_ADD);
-    draw_circle_grad(cx, cy, r, c, c & 0x00FFFFFFu);
+#ifdef GFX_GLOW
+    if (!gfx_glow(cx, cy, r, c))
+#endif
+        draw_circle_grad(cx, cy, r, c, c & 0x00FFFFFFu);
     gfx_blend(BLEND_ALPHA);
 }
 

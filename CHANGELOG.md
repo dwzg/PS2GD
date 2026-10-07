@@ -7,6 +7,190 @@ section from this file as release notes.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-07
+
+### Added
+
+- A Game Boy Advance version (`pulsedash.gba`, built by
+  `scripts/build-gba.sh` with arm-none-eabi-gcc, and by CI as the
+  `pulsedash-gba` artifact). It runs the game's own code, the same files as
+  the PC, PS2 and PSP: all six levels, practice, the results, the title
+  screen's demo run (its control hint under the ground's line, clear of
+  the run, as on the PC, beside the version: a build's commit, as on the
+  Game Boy Color), the garage, the level select, the options with the
+  audio delay, and saves in the cartridge's SRAM, with the same physics to
+  the tick, at the full frame rate with no frame late (the menus, the
+  fades and a level's loading included). Its graphics are drawn by the PC's
+  renderer at build time (12 pixels to a block; what turns, at each step
+  of its turn, the player's vehicles with their edges moved onto whole
+  pixels and their lines a pixel wide, so that a line doesn't come and go
+  as they turn; what has lines thinner than a pixel at that size, the
+  saws, orbs, coins, portals and the ball, pixel by pixel in its shapes) and
+  shown as tiles and sprites, with the level's colours, gradients, the
+  beat, parallax, see-through panels, the finish's flash, the glows (round
+  the player, the objects, the blocks, spikes and saws) and added light
+  done by the video hardware;
+  its songs and sound effects are the game's synth's, recorded at build
+  time (8-bit at 21 kHz, the songs in stereo on both Direct Sound
+  channels), and a second time mixed for the GBA's speaker (mono, the
+  bass cut, compressed: OUTPUT in the options). See
+  [docs/GBA_PORT.md](docs/GBA_PORT.md).
+- `gba_tool` makes the ROM's graphics, levels and sound with the game's
+  renderer, parser and synth, and `gba_tool audiocheck` checks their
+  encoding; `gba_test play` visits the menus and plays every level in the
+  ROM in mGBA's core, after an attempt that dies and with a pause, half of
+  them with the speaker's mix, failing unless the player is the
+  reference's after every tick, no frame is late anywhere, every attempt
+  keeps time with its song, the sound's DMAs are restarted where they have
+  read their buffers to the end, no text tile mixes two palettes, the pause
+  menu and the results appear whole, and the progress is saved, still
+  there after a restart and not lost to a save cut short.
+- PSP: OUTPUT in the options, AUTO (the default: by whether headphones are
+  plugged in), SPEAKERS or HEADPHONES: on SPEAKERS the
+  synth's mix is made for the PSP's own small speakers, the bass they can't
+  play cut below 250 Hz and the rest compressed, about 9 dB louder where
+  they play (`audio_set_output`, also on the GBA; `pd_tool wav ... speaker`
+  renders it on the PC).
+- PS2: FLICKER FILTER in the options, for a tube TV (off by default, kept
+  in the save's last reserved byte): the display's two read circuits show
+  the frame a line apart, blended as ps2sdk's libgraph does it, so each
+  line of the interlaced picture mixes two of the frame's and edges and
+  thin lines no longer flicker as much. The display's merge circuit does
+  it as it reads the frame out: it costs the drawing nothing.
+- `pd_tool shot` and `pd_tool menu` take a height after the width, to
+  stretch the picture: `640 512` is the PS2's PAL picture, drawn on its
+  pixel grid.
+- Releases carry the Game Boy Advance ROM too (`pulsedash-<version>.gba`,
+  and a zip with the documents).
+- PSP: smoothed edges. When the frame has the time, the GE draws it twice,
+  a quarter of a pixel apart, and blends the two: the turning cube, the
+  spikes, saws, orbs and the edges of everything moving come out without
+  stair steps, while text, icons and the strokes on whole pixels stay as
+  sharp as before. The second drawing replays the first one's batches into
+  the VRAM a depth buffer had (the game never used it), so it costs the CPU
+  next to nothing. It is guarded frame by frame: it starts only when it is
+  sure to end before the vblank (it takes the GE no longer than the frame
+  has taken so far up to the first drawing's end; the blend is timed), a
+  frame without the time shows the first drawing alone, and the smoothing
+  then stays off until frames have been light enough for two seconds. The
+  perf build reports it (`smooth` line). Glows are drawn from a small round
+  texture then, smooth instead of faceted (`gfx_glow`, an optional hook of
+  `gfx.h`; the other backends keep the triangle fans).
+
+### Changed
+
+- The vector family's drawing of the menus, the levels, the title's demo
+  and the particles is in files of its own (`game_draw.c`, `play_draw.c`,
+  `demo_draw.c`, `fx_draw.c`, in `VECTOR_SRC`), so a platform can run the
+  game's logic (`CORE_SRC`) with a presentation of its own; the camera,
+  the menus' palette and the difficulties' colours moved into the logic.
+- Faster on every platform, with the same results: a level is parsed in
+  linear time (each line's length was measured again for every column),
+  and the title's demo looks up its presses in fixed point.
+- PSP: a frame is no longer cleared before its background is drawn over
+  the whole screen (every screen has one), which saved the GE filling the
+  screen twice; a frame that does not start with one is still cleared.
+- The vector family (PC, PS2, PSP) moves the camera less than a pixel up or
+  down so the ground lies on whole pixels: with the PSP's smoothing it
+  stays a sharp line; elsewhere it looks the same as before.
+- Game Boy Color: the player's turned frames are cleaner (turned from the
+  art smoothed by Scale2x, with fewer lumps and stray corners; the ball
+  keeps its round outline), the small saw is a disc with a ring of its
+  teeth spinning inside it rather than an oval ring, and the speed portals'
+  chevrons no longer run together (every other one white).
+- Game Boy Color: a death looks as it does on the other versions: the
+  screen shakes and flashes white, and the player bursts into particles in
+  its two colours and white sparks, with a ring (it only blinked out, with
+  8 particles).
+- Game Boy Color: the sky is a gradient, from the level palette's top
+  colour to its bottom one, in 8 bands (in levels and on the title), each
+  set by an interrupt as the screen is drawn, the first by the vertical
+  blank's, so that a long frame (a pause's, the results') never shows the
+  last band's colour at the top.
+- Game Boy Color: the music is in stereo on headphones, the arpeggio panned
+  as the other versions pan its instrument (the pluck to the left, the saw
+  pluck and the bell to the right; melody, bass and drums in the middle).
+- Game Boy Color: the music's tick is assembly, a third of the time it
+  took (3 scanlines a frame, at most 8 where it was 32), which leaves room
+  for the sky; `scripts/gbc-emu-test.py` also dies six times in the first
+  level and fails if a frame runs late around a death.
+- PSP: the game stands still while the HOME menu is open (it played on
+  behind it, a run included). A level being played pauses, its pause menu
+  waiting under the HOME menu, so the run goes on only when it is resumed
+  from there (one being faded into pauses as it starts); the menus, the
+  title's demo, fades and the results don't move; the sound stops, and
+  comes back where it was when the HOME menu is closed (a level's music
+  when the run is resumed); and no time is made up then. The PSP's frame
+  loop tells the game with `game_suspend()` (`game.h`) and silences the
+  synth with `audio_suspend()`; HOME > Quit still saves before the game
+  exits.
+
+### Fixed
+
+- After a pause the music was a tick (17 ms) ahead of the run, a tick more
+  for every pause: neither the tick that paused nor the one that resumed
+  moves the run, but the music started again with the second. It now
+  starts again with the run's next tick, on the Game Boy Color too (its
+  own play code had the same offset: the frame that paused ticked the
+  music, not the run).
+- The button that went on from a menu jumped as the run went on: resuming
+  or restarting from the pause menu or replaying from the results with A
+  (a jump button too), the press was a jump on the run's first tick, and
+  so was the button still down from the level select. That button is now
+  not a jump until it has been let go, as on the Game Boy Color.
+- PS2 in PAL: text, icons and outlines came out uneven. The PAL picture
+  is 512 lines tall, so a pixel of the 448-line virtual screen is 8/7 of a
+  line, but they were put on whole pixels as if it were one: the rows of
+  small text were 2 or 3 lines tall, outlines 3 or 4. The pixel grid
+  (`draw.h`) has a height of its own now, set to the picture's in PAL, and
+  they are drawn on whole lines of it, as even as in NTSC. NTSC, the PSP
+  and the PC draw exactly what they did.
+- Game Boy Color: the melody went silent after a coin, a checkpoint or a
+  menu's sound until its next note (the sound effect borrows its channel);
+  the note held comes back now, and so do the notes held through a pause.
+- Game Boy Color: the kick switched the wave channel's DAC off and on to
+  change its waveform, twice for every kick, which clicks on hardware; the
+  channel is now stopped by its length counter the tick before, and the
+  DAC stays on.
+- Game Boy Color: the frame a run died in could run late (the physics and
+  the save, the progress and "new best" in one frame); what a death counts
+  for is now done two frames later.
+- Game Boy Color: the pause menu and the results came up part-drawn,
+  starting part-way down the screen for a frame, and a pause showed the
+  stopped run for three frames while its menu was drawn. The pause menu is
+  now drawn as the level begins, hidden, and shown whole from the frame
+  after the pause; the results from the top of the frame after they are
+  drawn. `scripts/gbc-emu-test.py` fails if the screen shows anything else
+  while paused.
+- PSP: in the level select the music crackled and slowed down on the
+  console. The audio thread handed its chunks to the hardware itself, one
+  mixed while the other played (about 11 ms), and ran below the game loop:
+  when a frame's drawing kept the CPU longer than that, as the level
+  select's did, the hardware ran dry, and the song, whose clock is the
+  samples mixed, fell behind. A thread above the loop now hands the chunks
+  over (it only waits, and wakes for a moment as each one starts), while
+  the mixer, still below the loop so that mixing never delays a frame,
+  keeps two more mixed ahead: the loop can keep the CPU for over 20 ms. The
+  sound comes about 21 ms later than before, which the song clock allows
+  for, so runs keep time with their songs and the audio delay set in the
+  options still holds. Checked in PPSSPP with the game's and the synth's
+  work made to take longer, for the console's slower CPU: at 2.5 times as
+  long the level select's song ran 3 to 7% slow before (the title's kept
+  time); now every screen keeps time at 3 times as long, and no frame is
+  late.
+- PC, PS2 and PSP: the title's logo stuttered on the PS2: it jumped on
+  every beat, and text is drawn on whole pixels, so the jump came as a
+  drop of 2 or 3 pixels in one frame. It now bobs on its slow sine alone,
+  as on the Game Boy Advance.
+- PC, PS2 and PSP: the level select drew the chosen level's card twice, its panel darker,
+  when it opened and after scrolling left (once after scrolling right, as
+  in the screenshots), drew a card a whole screen away as well, and read
+  every card's level header (all of the level, for its coins) each frame.
+  Each card is now drawn once, only while some of it is on screen, from
+  headers read once: at rest the level select draws half the vertices it
+  did, fewer than the title. After scrolling right it looks exactly as it
+  did.
+
 ## [1.2.0] - 2026-10-04
 
 ### Added
@@ -182,7 +366,8 @@ First release.
   blank (the audio thread could delay them before), and drawn interpolated
   between game ticks, which also makes PAL (50 Hz) consoles scroll evenly.
 
-[Unreleased]: https://github.com/dwzg/pulsedash/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/dwzg/pulsedash/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/dwzg/pulsedash/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/dwzg/pulsedash/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/dwzg/pulsedash/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/dwzg/pulsedash/releases/tag/v1.0.0

@@ -37,6 +37,17 @@ const Palette g_palettes[PALETTE_COUNT] = {
 
 void palette_lerp(Palette *out, const Palette *a, const Palette *b, float t)
 {
+    /* the ends as they are (col_lerp gives a at 0 and b at 1), not blended
+     * colour by colour: the run's palette is one most of the time, and
+     * without a floating point unit the blend costs a GBA 10 scanlines */
+    if (t <= 0.0f) {
+        *out = *a;
+        return;
+    }
+    if (t >= 1.0f) {
+        *out = *b;
+        return;
+    }
     out->bg_top = col_lerp(a->bg_top, b->bg_top, t);
     out->bg_bot = col_lerp(a->bg_bot, b->bg_bot, t);
     out->ground = col_lerp(a->ground, b->ground, t);
@@ -52,6 +63,13 @@ const Color g_player_colors[PLAYER_COLOR_COUNT] = {
     RGB(255, 255, 255), RGB(40, 40, 48),   RGB(0, 200, 150),  RGB(255, 170, 200),
     RGB(255, 240, 120), RGB(130, 220, 255),
 };
+
+Color difficulty_color(int d)
+{
+    static const Color c[6] = {RGB(90, 220, 255), RGB(90, 255, 120), RGB(255, 220, 60),
+                               RGB(255, 140, 40), RGB(255, 70, 160), RGB(255, 40, 40)};
+    return c[clampi(d, 0, 5)];
+}
 
 const char *const g_icon_names[ICON_COUNT] = {
     "CORE", "VISOR", "BUDDY", "SPLIT", "TARGET", "PLUS", "STRIPE", "GEM",

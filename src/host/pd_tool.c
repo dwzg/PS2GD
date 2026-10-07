@@ -4,16 +4,18 @@
  *   pd_tool check                       parse every level and song, report stats
  *   pd_tool solve <level|all> [K]       prove levels are beatable (inputs change
  *                                       at most every K ticks, all phases)
- *   pd_tool shot <level> <sec> <out.bmp> [practice] [width]
+ *   pd_tool shot <level> <sec> <out.bmp> [practice] [width [height]]
  *                                       screenshot of the level at time sec,
  *                                       played by the solver (images are PNG
- *                                       when the name ends in .png)
- *   pd_tool menu <title|select|garage|options|delay|pause> <out.bmp> [sec] [width]
+ *                                       when the name ends in .png; with a
+ *                                       height, stretched to it: 640 512 is
+ *                                       the PS2's PAL picture)
+ *   pd_tool menu <title|select|garage|options|delay|output|flicker|pause> <out.bmp> [sec] [width [height]]
  *                                       a menu screen, sec seconds after it opened
  *   pd_tool overview <level> <out.bmp>  whole-level map with the solver path
  *   pd_tool xmb <icon0.png> <pic1.png>  the PSP menu's icon (144x80) and background
  *                                       (480x272) for the game (build with PSP=1)
- *   pd_tool wav <song> <seconds> <out.wav>
+ *   pd_tool wav <song> <seconds> <out.wav> [speaker]
  *   pd_tool smoke                       drive the full game through menus and a
  *                                       level with scripted input
  *   pd_tool rhythm <lvl|all> [tol] [x]  can the level be beaten pressing (in cube,
@@ -78,6 +80,12 @@ int plat_save_write(const void *buf, int size)
 }
 
 const char *plat_name(void) { return "TOOL"; }
+
+#if FLICKER_OPTION
+/* (built with -DFLICKER_OPTION=1 it draws the PS2's options, FLICKER
+ * FILTER with them) */
+void plat_flicker_filter(int on) { (void)on; }
+#endif
 
 
 /*
@@ -251,13 +259,33 @@ static int save_image(SDL_Surface *surf, const char *out)
     return r;
 }
 
+/* The scale across of shot and menu pictures given a height (picture_size);
+ * 0: the one down */
+static float s_scale_x;
+
+/* The size of shot and menu pictures: [width [height]] from argv[i] on,
+ * twice the virtual screen without. With a height the virtual screen is
+ * stretched to it, and drawn on a pixel grid of its own down the screen
+ * (draw.h), like the PS2's in PAL (640 512). */
+static void picture_size(int argc, char **argv, int i)
+{
+    int w = argc > i ? atoi(argv[i]) : SCREEN_W * 2;
+    int h = argc > i + 1 ? atoi(argv[i + 1]) : (argc > i ? w * SCREEN_H / SCREEN_W : SCREEN_H * 2);
+    offscreen_init(w, h);
+    if (argc > i + 1) {
+        s_scale_x = (float)w / SCREEN_W;
+        draw_set_pixel_grid_y(PIXEL_GRID * ((float)h / SCREEN_H) / s_scale_x);
+    }
+}
+
 static void render_frame(const char *out)
 {
     SDL_SetRenderDrawColor(s_ren, 0, 0, 0, 255);
     SDL_RenderClear(s_ren);
-    /* one scale both ways, as on the PSP (its 480 pixels show 479.6 of them) */
+    /* one scale both ways, as on the PSP (its 480 pixels show 479.6 of
+     * them), unless the picture is stretched (picture_size) */
     float k = (float)s_surf->h / SCREEN_H;
-    gfx_sdl_begin(s_ren, k, k);
+    gfx_sdl_begin(s_ren, s_scale_x > 0.0f ? s_scale_x : k, k);
     game_render(1.0f);
     gfx_sdl_flush();
     SDL_RenderPresent(s_ren);
@@ -319,7 +347,9 @@ static int cmd_menu(const char *which, const char *out, float sec)
     int scr = SCR_TITLE;
     if (!strcmp(which, "select")) scr = SCR_SELECT;
     else if (!strcmp(which, "garage")) scr = SCR_GARAGE;
-    else if (!strcmp(which, "options") || !strcmp(which, "delay")) scr = SCR_OPTIONS;
+    else if (!strcmp(which, "options") || !strcmp(which, "delay") || !strcmp(which, "output") ||
+             !strcmp(which, "flicker"))
+        scr = SCR_OPTIONS;
     g_game.screen = scr;
     g_game.fade = 0.0f;
     g_game.fading = 0;
@@ -334,13 +364,30 @@ static int cmd_menu(const char *which, const char *out, float sec)
     }
     if (!strcmp(which, "delay")) {
         /* audio delay selected, metronome running, set to +30 ms */
-        g_game.options_sel = 2;
+        g_game.options_sel = OPT_DELAY;
         for (int k = 0; k < 3; k++) {
             tick_with_audio(BTN_RIGHT);
             tick_with_audio(0);
         }
         for (int t = 0; t < 61; t++) tick_with_audio(0);
     }
+#if AUDIO_OUTPUT_OPTION
+    if (!strcmp(which, "output")) {
+        /* OUTPUT chosen, set to the speakers */
+        g_game.options_sel = OPT_OUTPUT;
+        g_game.save.speaker = OUTPUT_HEADPHONES;
+        tick_with_audio(BTN_RIGHT);
+        for (int t = 0; t < 30; t++) tick_with_audio(0);
+    }
+#endif
+#if FLICKER_OPTION
+    if (!strcmp(which, "flicker")) {
+        /* FLICKER FILTER chosen, turned on */
+        g_game.options_sel = OPT_FLICKER;
+        tick_with_audio(BTN_RIGHT);
+        for (int t = 0; t < 30; t++) tick_with_audio(0);
+    }
+#endif
     render_frame(out);
     return 0;
 }
@@ -438,10 +485,11 @@ static int cmd_overview(int idx, const char *out)
 static void put_le32(FILE *f, uint32_t v) { fwrite(&v, 4, 1, f); }
 static void put_le16(FILE *f, uint16_t v) { fwrite(&v, 2, 1, f); }
 
-static int cmd_wav(int song, float secs, const char *out)
+static int cmd_wav(int song, float secs, const char *out, int speaker)
 {
     audio_init();
     audio_set_volume(8, 8);
+    audio_set_output(speaker);
     audio_play_song(song, 0.0f);
     int frames = (int)(secs * AUDIO_RATE);
     int16_t *buf = (int16_t *)malloc((size_t)frames * 4);
@@ -1267,15 +1315,16 @@ int main(int argc, char **argv)
         return fails ? 1 : 0;
     }
     if (!strcmp(cmd, "shot") && argc >= 5) {
-        offscreen_init(argc > 6 ? atoi(argv[6]) : SCREEN_W * 2, argc > 6 ? atoi(argv[6]) * SCREEN_H / SCREEN_W : SCREEN_H * 2);
+        picture_size(argc, argv, 6);
         return cmd_shot(level_arg(argv[2]), (float)atof(argv[3]), argv[4], argc > 5 && atoi(argv[5]));
     }
     if (!strcmp(cmd, "menu") && argc >= 4) {
-        offscreen_init(argc > 5 ? atoi(argv[5]) : SCREEN_W * 2, argc > 5 ? atoi(argv[5]) * SCREEN_H / SCREEN_W : SCREEN_H * 2);
+        picture_size(argc, argv, 5);
         return cmd_menu(argv[2], argv[3], argc > 4 ? (float)atof(argv[4]) : 0.0f);
     }
     if (!strcmp(cmd, "overview") && argc >= 4) return cmd_overview(level_arg(argv[2]), argv[3]);
-    if (!strcmp(cmd, "wav") && argc >= 5) return cmd_wav(atoi(argv[2]), (float)atof(argv[3]), argv[4]);
+    if (!strcmp(cmd, "wav") && argc >= 5)
+        return cmd_wav(atoi(argv[2]), (float)atof(argv[3]), argv[4], argc > 5 && !strcmp(argv[5], "speaker"));
     if (!strcmp(cmd, "smoke")) return cmd_smoke() ? 1 : 0;
     if (!strcmp(cmd, "prof") && argc >= 3) return cmd_prof(level_arg(argv[2]));
     if (!strcmp(cmd, "xmb") && argc >= 4) return cmd_xmb(argv[2], argv[3]);

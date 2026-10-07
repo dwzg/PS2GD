@@ -22,6 +22,7 @@
  * frame while running */
 uint8_t g_phase;
 uint16_t g_dropped;
+uint8_t g_perf_core;
 GsPlayer g_snap; /* the player after the last tick (frames end mid-tick) */
 static uint8_t s_vbl_start;
 extern volatile uint8_t g_vbl_count;
@@ -42,6 +43,12 @@ int8_t s_ship_f;
 Snap s_cp[MAX_CP];
 uint8_t s_ncp;
 static uint8_t s_paused;
+/* A resumed run's music goes on in the frame after the one that resumed
+ * it (as src/core/play.c's): the frame that paused ticked the music but
+ * not the run, and neither moves in the one that resumes, so the song
+ * would be a tick ahead after every pause. In the next frame the music
+ * (ticked first) is still paused while the run moves; then both go on. */
+static uint8_t s_resume_music;
 /* The button that started or resumed the level may still be down: it
  * doesn't jump until it has been let go. */
 static uint8_t s_jump_lock;
@@ -316,12 +323,13 @@ static void play_frame(void)
             SHOW_SPRITES;
         }
         if (g_pressed & J_A) {
-            music_pause(0);
+            s_resume_music = 1;
             s_jump_lock = 1;
         } else if (g_pressed & J_SELECT) {
             if (g_phase == PH_RUN && gs_p.ticks > PROGRESS_LEFT_TICKS) {
                 gs_p.dead = 1;
                 on_death();
+                death_count();
             }
             s_ncp = 0;
             s_new_best = 0;
@@ -335,6 +343,7 @@ static void play_frame(void)
             if (g_phase == PH_RUN && gs_p.ticks > PROGRESS_LEFT_TICKS) {
                 gs_p.dead = 1;
                 on_death();
+                death_count();
             }
             s_quit = 1;
         }
@@ -344,9 +353,16 @@ static void play_frame(void)
         s_paused = 1;
         music_pause(1);
         sfx_play(SFX_SELECT);
-        HIDE_SPRITES; /* they would cover the menu */
-        ui_pause(s_practice);
+        /* The menu (drawn when the level began: drawing it now would take
+         * this frame and the next two) and no sprites (they would cover
+         * it), from the next frame's top. */
+        g_lcdc_on = LCDCF_WINON;
+        g_lcdc_off = LCDCF_OBJON;
         return;
+    }
+    if (s_resume_music) {
+        s_resume_music = 0;
+        music_pause(0);
     }
 
     switch (g_phase) {
@@ -355,6 +371,7 @@ static void play_frame(void)
         break;
     case PH_DEAD:
         s_t++;
+        if (s_t == 2) death_count(); /* (on_death) */
         if (s_t >= (s_practice ? 24 : 45)) {
             g_phase = PH_RESPAWN;
             s_t = 0;
@@ -400,9 +417,11 @@ static void play_frame(void)
             int16_t d = (stop - s_cam) >> 3;
             s_cam += d > 2 ? 2 : (d < 1 ? 1 : d);
         }
-        if (s_t == 70)
+        if (s_t == 70) {
             ui_results(s_practice, s_attempts, s_jumps_total, (uint16_t)(s_ticks_total / 60),
                        s_practice ? 0 : L->ncoins, gs_p.coins);
+            g_lcdc_on = LCDCF_WINON; /* (all drawn: from the next frame's top) */
+        }
         if (s_t > 70 && (g_pressed & (J_A | J_START))) s_quit = 1;
         if ((s_fw & 15) == 0 && s_fw < 64) burst((int16_t)(40 + (s_fw << 1)), (int16_t)(30 + (s_fw & 31)), 24);
         break;
@@ -410,7 +429,7 @@ static void play_frame(void)
     }
 
     if (g_phase == PH_RUN) s_cam = px_of(gs_p.x) - PLAYER_SX;
-    g_scx = (uint8_t)(s_cam + (s_map_off << 3));
+    g_scx = (uint8_t)(s_cam + (s_map_off << 3) + s_shake_dx);
     if ((g_frame & 3) == 0) saw_frame((uint8_t)((g_frame >> 2) & 3));
     {
 #ifdef PD_PERF
@@ -426,20 +445,26 @@ static void play_frame(void)
     /* Then what can wait a frame if this one is short of time (a frame
      * that runs late slows the game and its music down): the columns
      * coming into view, the progress bar and the palettes, each only if
-     * its longest run (about 14, 20 and 31 scanlines) still fits. */
+     * its longest run (18, 23 and 44 scanlines, 15 for the beat's flash
+     * alone, as PERF=1 builds time them) still fits, with a few to spare
+     * for the sky's interrupts meanwhile. */
     {
+        uint8_t lines;
 #ifdef PD_PERF
         uint16_t t;
 #endif
+        /* (for the emulator test: where the work that can't wait ended) */
+        g_perf_core = lines = frame_lines();
         PERF_BEGIN(t);
         if (g_phase == PH_RESPAWN) stream(4);
-        else if (frame_lines() < 154 - 20) stream(2);
+        else if (lines < 154 - 24) stream(2);
         PERF_END(PERF_STREAM, t);
         PERF_BEGIN(t);
-        if ((g_phase == PH_RUN || g_phase == PH_COMPLETE) && !s_demo && frame_lines() < 154 - 26) hud_update();
+        if ((g_phase == PH_RUN || g_phase == PH_COMPLETE) && !s_demo && frame_lines() < 154 - 28) hud_update();
         PERF_END(PERF_HUD, t);
         PERF_BEGIN(t);
-        if (frame_lines() < 154 - 37) palettes();
+        lines = frame_lines();
+        if (lines < 154 - 22) palettes((uint8_t)(154 - lines));
         PERF_END(PERF_PAL, t);
     }
 }
@@ -459,6 +484,7 @@ static void level_begin(const GbLevel *lv)
     HIDE_WIN;
     s_quit = 0;
     s_paused = 0;
+    s_resume_music = 0;
     s_ncp = 0;
     s_attempts = 0;
     s_ticks_total = 0;
@@ -519,11 +545,14 @@ void play_level(uint8_t level, uint8_t practice)
     g_screen = SCR_PLAY;
     s_practice = practice;
     level_begin(&gbc_levels[level]);
-    fill_win(0, 0, 20, 10, UT_BLANK, PAL_TEXT | 0x08); /* (the title was there) */
+    /* the pause menu, in the window's map (over the title's) and hidden
+     * until a pause shows it; the results are drawn over it */
+    ui_pause(practice);
     ui_hud_init();
     hud_thresholds();
     ui_attempt(s_attempts);
     g_hud_split = 1;
+    g_sky_on = 1;
     video_on();
     music_play(practice ? SONG_PRACTICE_GB : SONG_FIRST_LEVEL_GB + L->song);
     s_jump_lock = 1;
@@ -534,6 +563,7 @@ void play_level(uint8_t level, uint8_t practice)
     HIDE_WIN;
     hide_all_sprites();
     g_hud_split = 0;
+    g_sky_on = 0;
     g_scx = 0;
 }
 
@@ -548,12 +578,14 @@ uint8_t play_title(void)
     ui_title(s_sel);
     LYC_REG = 79;
     g_title_split = 1;
+    g_sky_on = 1;
     video_on();
     music_play(SONG_MENU_GB);
     s_jump_lock = 0;
     level_loop();
     video_blank();
     hide_all_sprites();
+    g_sky_on = 0;
     g_title_split = 0;
     LYC_REG = 7;
     LCDC_REG &= ~LCDCF_BG9C00;

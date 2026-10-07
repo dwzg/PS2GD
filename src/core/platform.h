@@ -13,4 +13,10 @@ int plat_save_write(const void *buf, int size);
 /* Short label of the platform shown in the options screen. */
 const char *plat_name(void);
 
+#if FLICKER_OPTION
+/* The options' FLICKER FILTER: soften the interlaced picture against
+ * flicker (on) or show it sharp; from the next frame shown. */
+void plat_flicker_filter(int on);
+#endif
+
 #endif

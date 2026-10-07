@@ -37,8 +37,14 @@ enum {
     LC_SEP,         /* lines between ground tiles */
     LC_HUD,         /* backing of the progress bar row */
     LC_HUD_DIM,     /* empty part of the bar */
-    LC_COUNT
+    LC_BAND,        /* the sky's gradient, top to bottom, in SKY_BANDS bands */
+    LC_COUNT = LC_BAND + 8
 };
+/* The sky from the level's top row to its bottom one is a gradient of 8
+ * bands of 15 scanlines (the other versions' sky goes from one colour at
+ * the top to another at the bottom; LC_SKY is between the two). */
+#define SKY_BANDS 8
+#define SKY_BAND_LINES 15
 
 /* a level's colours, 5-bit red, green, blue and a 0 (palette.c steps
  * through them 4 bytes at a time) */

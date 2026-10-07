@@ -27,4 +27,13 @@ void gfx_rect_v(float x0, float y0, float x1, float y1, Color top, Color bottom)
 /* Horizontal gradient: left color at x0, right color at x1. */
 void gfx_rect_h(float x0, float y0, float x1, float y1, Color left, Color right);
 
+/* Optional, for backends built with GFX_GLOW (the PSP's): a round glow,
+ * color c at the center fading out to nothing at r, drawn in one piece
+ * (from a texture) with the current blend mode. Returns 0 when it did not
+ * draw it; draw_glow() then draws it as a fan of triangles, as on the other
+ * backends. */
+#ifdef GFX_GLOW
+int gfx_glow(float cx, float cy, float r, Color c);
+#endif
+
 #endif

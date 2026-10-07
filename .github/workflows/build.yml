@@ -1,10 +1,10 @@
 name: build
 
 # Every push and pull request: build the PS2 ELF and the PSP EBOOT and run
-# the level tests; build the Game Boy Color demo ROM and play its levels in
-# an emulator. Pushing a version tag (v1.2.0, or v1.3.0-rc1 for a
-# pre-release) also publishes a GitHub release with the PS2 and PSP builds
-# once their jobs pass.
+# the level tests; build the Game Boy Color demo ROM and the Game Boy
+# Advance ROM and play their levels in an emulator. Pushing a version tag
+# (v1.2.0, or v1.3.0-rc1 for a pre-release) also publishes a GitHub
+# release with all the builds once their jobs pass.
 on:
   push:
     branches: ['**']
@@ -104,10 +104,32 @@ jobs:
           name: pulsedash-gbc
           path: build/gbc/pulsedash.gbc
 
+  gba:
+    name: Game Boy Advance ROM and emulator test
+    runs-on: ubuntu-24.04 # its libmgba-dev, 0.10.2, is the mGBA the test was written against
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the version shown on the title screen
+      - name: Install the ARM toolchain, mGBA's library and SDL2
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libmgba-dev libsdl2-dev
+      - name: Build (gbafix fetched and checked, the ROM's data made by gba_tool, then the ROM)
+        run: scripts/build-gba.sh -j"$(nproc)"
+      - name: Check the songs' and sounds' encoding against the synth
+        run: build/host/gba_tool audiocheck
+      - name: Play every level in an emulator (mGBA), as the reference on every tick, each frame on time, and the save
+        run: |
+          make -f Makefile.host -j"$(nproc)" build/host/gba_test
+          build/host/gba_test play build/gba/pulsedash.gba
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulsedash-gba
+          path: build/gba/pulsedash.gba
+
   release:
     name: GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ps2, psp, host, gbc]
+    needs: [ps2, psp, host, gbc, gba]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -125,6 +147,10 @@ jobs:
         with:
           name: pulsedash-gbc
           path: gbc
+      - uses: actions/download-artifact@v4
+        with:
+          name: pulsedash-gba
+          path: gba
       - name: Package
         run: |
           ver="$GITHUB_REF_NAME"
@@ -141,8 +167,13 @@ jobs:
           mkdir -p "pkg-gbc/pulsedash-$ver-gbc"
           cp gbc/pulsedash.gbc README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md docs/GBC_PORT.md "pkg-gbc/pulsedash-$ver-gbc/"
           (cd pkg-gbc && zip -r "../dist/pulsedash-$ver-gbc.zip" "pulsedash-$ver-gbc")
+          # Game Boy Advance: the same
+          cp gba/pulsedash.gba "dist/pulsedash-$ver.gba"
+          mkdir -p "pkg-gba/pulsedash-$ver-gba"
+          cp gba/pulsedash.gba README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md docs/GBA_PORT.md "pkg-gba/pulsedash-$ver-gba/"
+          (cd pkg-gba && zip -r "../dist/pulsedash-$ver-gba.zip" "pulsedash-$ver-gba")
           (cd dist && sha256sum PULSEDASH.ELF "pulsedash-$ver.zip" "pulsedash-$ver-psp.zip" "pulsedash-$ver.gbc" \
-              "pulsedash-$ver-gbc.zip" > SHA256SUMS)
+              "pulsedash-$ver-gbc.zip" "pulsedash-$ver.gba" "pulsedash-$ver-gba.zip" > SHA256SUMS)
           ls -l dist
       - name: Release notes
         run: |
@@ -167,6 +198,10 @@ jobs:
             echo "Color, Game Boy Advance or Analogue Pocket from a flash cartridge with save RAM. \`pulsedash-$ver-gbc.zip\`"
             echo "holds the same ROM with the README, changelog, licenses and docs/GBC_PORT.md."
             echo ""
+            echo "**Game Boy Advance:** \`pulsedash-$ver.gba\` runs in any Game Boy Advance emulator (mGBA, say), and on"
+            echo "a Game Boy Advance, Nintendo DS (Lite) or Analogue Pocket from a flash cartridge that takes 32 MB ROMs and has SRAM."
+            echo "\`pulsedash-$ver-gba.zip\` holds the same ROM with the README, changelog, licenses and docs/GBA_PORT.md."
+            echo ""
             cat changes.md
           } > notes.md
           cat notes.md
@@ -180,4 +215,5 @@ jobs:
           gh release create "$ver" --repo "$GITHUB_REPOSITORY" --verify-tag $pre \
             --title "Pulse Dash $ver" --notes "$(cat notes.md)" --generate-notes \
             dist/PULSEDASH.ELF "dist/pulsedash-$ver.zip" "dist/pulsedash-$ver-psp.zip" \
-            "dist/pulsedash-$ver.gbc" "dist/pulsedash-$ver-gbc.zip" dist/SHA256SUMS
+            "dist/pulsedash-$ver.gbc" "dist/pulsedash-$ver-gbc.zip" "dist/pulsedash-$ver.gba" \
+            "dist/pulsedash-$ver-gba.zip" dist/SHA256SUMS

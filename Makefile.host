@@ -10,6 +10,8 @@
 #                                       (src/psp/ICON0.PNG, PIC1.PNG)
 #   make -f Makefile.host build/host/gbc_tool  -> the Game Boy Color data tool
 #                                       (Makefile.gbc builds and uses it)
+#   make -f Makefile.host build/host/gba_tool  -> the Game Boy Advance data tool
+#                                       (Makefile.gba builds and uses it)
 
 CC ?= cc
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -27,21 +29,34 @@ OUT := build/host
 endif
 include sources.mk
 CORE_OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(CORE_SRC))
+VECTOR_OBJ := $(patsubst src/%.c,$(OUT)/%.o,$(VECTOR_SRC))
 GAME_OBJ := $(OUT)/host/main_sdl.o $(OUT)/host/gfx_sdl.o
 TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/solver.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o
 GBC_TOOL_OBJ := $(OUT)/host/gbc_tool.o $(OUT)/host/solver.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o \
                 $(OUT)/gbc/gbsim.o $(OUT)/gbc/gbcells.o $(OUT)/gbc/tileset.o
+GBA_TOOL_OBJ := $(OUT)/host/gba_tool.o $(OUT)/host/gba_art.o $(OUT)/host/gba_art_obj.o $(OUT)/host/gba_audio.o $(OUT)/host/gfx_sdl.o \
+                $(OUT)/host/png_write.o $(OUT)/host/gba_levels.o $(OUT)/gba/cellmap.o
 
 all: $(OUT)/pulsedash $(OUT)/pd_tool
 
-$(OUT)/pulsedash: $(CORE_OBJ) $(GAME_OBJ)
+$(OUT)/pulsedash: $(CORE_OBJ) $(VECTOR_OBJ) $(GAME_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-$(OUT)/pd_tool: $(CORE_OBJ) $(TOOL_OBJ)
+$(OUT)/pd_tool: $(CORE_OBJ) $(VECTOR_OBJ) $(TOOL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-$(OUT)/gbc_tool: $(CORE_OBJ) $(GBC_TOOL_OBJ)
+$(OUT)/gbc_tool: $(CORE_OBJ) $(VECTOR_OBJ) $(GBC_TOOL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(OUT)/gba_tool: $(CORE_OBJ) $(VECTOR_OBJ) $(GBA_TOOL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+# runs the GBA ROM in mGBA's core (needs libmgba-dev), with the physics
+# and the solver for the reference runs
+GBA_TEST_OBJ := $(OUT)/host/gba_test.o $(OUT)/host/png_write.o $(OUT)/host/solver.o $(OUT)/core/sim.o \
+                $(OUT)/core/level.o $(patsubst src/%.c,$(OUT)/%.o,$(wildcard src/levels/*.c))
+$(OUT)/gba_test: $(GBA_TEST_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ -lmgba $(LDLIBS)
 
 $(OUT)/host/%.o: CFLAGS += -Wno-double-promotion
 
@@ -50,7 +65,7 @@ $(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
 $(OUT)/core/version.o: FORCE
 FORCE:
 
-$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h) src/ps2/target.h src/psp/target.h
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h) $(wildcard src/gba/*.h) src/ps2/target.h src/psp/target.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

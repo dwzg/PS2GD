@@ -31,6 +31,16 @@ The game uses no GPL code.
 |-----------|----------|---------|
 | [GBDK-2020](https://github.com/gbdk-2020/gbdk-2020) library (gbdk-lib) and the SDCC runtime library | start-up code, interrupt handlers, video, joypad and bank switching helpers, arithmetic and memory routines | GPL 2.0 or later with the linking exception (the ROM may be distributed under any terms) |
 
+## In the Game Boy Advance build (`pulsedash.gba`)
+
+| Component | Used for | License |
+|-----------|----------|---------|
+| newlib (Debian/Ubuntu's `libnewlib-arm-none-eabi`) | C and math library (memory and string functions, `snprintf`, `malloc`, `sinf`, `expf`, ...) | BSD-style licenses (see the newlib sources) |
+| libgcc (part of `gcc-arm-none-eabi`) | software floating point and division | GPL 3.0 with the GCC Runtime Library Exception (the ROM may be distributed under any terms) |
+
+The start-up code, linker script and hardware access are this project's
+own (no GBA SDK is used).
+
 ## In the PC build
 
 | Component | Used for | License |
@@ -44,6 +54,8 @@ The game uses no GPL code.
 | [Play!](https://github.com/jpd002/Play-) | emulator core in `tools/play-harness` (fetched at build time; the harness itself is adapted from Play!'s AutoTest, see [its LICENSE](tools/play-harness/LICENSE)) | BSD 2-Clause |
 | [GBDK-2020](https://github.com/gbdk-2020/gbdk-2020) and [SDCC](https://sdcc.sourceforge.net/) | compiler, assembler and linker of the Game Boy Color demo (`scripts/build-gbc.sh` builds GBDK-2020 from source) | GPL 2.0 or later; GBDK-2020's tools: zlib, MIT or public domain |
 | [PyBoy](https://github.com/Baekalfen/PyBoy) | Game Boy emulator that `scripts/gbc-emu-test.py` runs the ROM in (installed with pip) | LGPL 3.0 |
+| [gbafix](https://github.com/devkitPro/gba-tools) (devkitPro's gba-tools) | writes the Game Boy Advance ROM's header logo and checksum (`scripts/build-gba.sh` fetches a pinned version and builds it) | LGPL 2.0 or later |
+| [mGBA](https://mgba.io) (libmgba) | Game Boy Advance emulator core that `gba_test` runs the ROM in (installed from the distribution) | MPL 2.0 |
 | [PPSSPP](https://github.com/hrydgard/ppsspp) | PSP emulator that `scripts/psp-emu-test.sh` fetches and builds with the hooks in `tools/ppsspp-harness` (those are this project's own code, under MIT; the test runner built from them is GPL) | GPL 2.0 or later |
 
 ## Trademarks
@@ -52,7 +64,8 @@ Pulse Dash is an independent, unofficial fan project. It is not affiliated
 with, endorsed or sponsored by RobTop Games, Sony Interactive
 Entertainment or Nintendo. "Geometry Dash" is a trademark of RobTop Games;
 "PlayStation", "PS2" and "PSP" are trademarks of Sony Interactive
-Entertainment; "Game Boy" and "Game Boy Color" are trademarks of Nintendo.
+Entertainment; "Game Boy", "Game Boy Color" and "Game Boy Advance" are
+trademarks of Nintendo.
 These names are used only to describe what the game is inspired by and
 what it runs on. The MIT license covers this project's own work and grants
 no rights to anyone's trademarks.

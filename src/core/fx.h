@@ -23,10 +23,14 @@ void fx_clear_space(int space);
 void fx_shift(int space, float dx);
 Particle *fx_spawn(int space);
 void fx_update(float dt);
+/* Every particle slot, active or not (count: how many), for a presentation
+ * to draw the active ones. */
+const Particle *fx_particles(int *count);
 /*
- * World particles are drawn with the camera transform (blocks -> pixels).
- * `back` rewinds each particle along its velocity by that many seconds
- * (render interpolation between ticks).
+ * The vector family's drawing (fx_draw.c). World particles are drawn with
+ * the camera transform (blocks -> pixels). `back` rewinds each particle
+ * along its velocity by that many seconds (render interpolation between
+ * ticks).
  */
 void fx_draw(int space, float cam_x, float cam_y, float back);
 
