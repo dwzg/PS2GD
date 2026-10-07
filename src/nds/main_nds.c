@@ -13,7 +13,6 @@
  * is shown.
  */
 #include <nds.h>
-#include <stdio.h>
 
 #include "nds_platform.h"
 #include "../core/audio.h"
@@ -40,12 +39,25 @@ typedef struct {
     uint32_t draw_last;      /* and the drawing (game_render) */
     uint32_t audio_last;     /* and the sound (audio_nds_update) */
     uint32_t tick_max, draw_max, audio_max; /* the most each took since boot */
+    uint32_t sum;                /* all the frames' work, for the mean */
+    uint32_t save_ok, sound_ok;  /* the save and the sound found their places */
     /* the last 8 late frames: which, on what screen, and what each part took */
     struct {
-        uint32_t frame, screen, tick, draw, audio;
+        uint32_t frame, screen, tick, draw, audio, bottom;
     } late_at[8];
 } NdsStats;
 volatile NdsStats g_nds_stats = {.magic = 0x534E4450u};
+
+/* Where the emulator test (src/host/nds_test.c) finds the game's state:
+ * the addresses of what it reads, then two sizes (its Player and Progress
+ * must be laid out as the ROM's). */
+__attribute__((used)) const void *const g_test_info[] = {
+    &g_game.screen, &g_game.fade, &g_game.sel_level, &g_game.play.phase, &g_game.play.p,
+    &g_game.save.progress, &g_game.play.paused, &g_game.play.results_sel, &g_game.menu_sel,
+    &g_game.play.level_idx, &g_game.play.practice, &g_game.play.phase_t, &g_game.sel_scroll,
+    (const void *)&g_audio_song, (const void *)&g_audio_heard, (const void *)&g_nds_stats,
+    (const void *)sizeof(Player), (const void *)sizeof(Progress),
+};
 
 static volatile uint32_t s_vblanks;
 
@@ -65,7 +77,13 @@ static void clock_init(void)
     TIMER2_CR = TIMER_ENABLE | TIMER_DIV_1;
 }
 
+uint32_t nds_clock(void);
 static uint32_t clock_now(void)
+{
+    return nds_clock();
+}
+
+uint32_t nds_clock(void)
 {
     uint16_t hi, lo, hi2;
     do {
@@ -100,24 +118,28 @@ static uint32_t read_pad(void)
 
 int main(int argc, char **argv)
 {
-    /* the top screen: the 3D engine on BG0; the bottom one: text for now */
+    /* on a DSi (or a 3DS) that runs the game as a DSi game, the ARM9 at its
+     * 133 MHz, twice the DS's: the same game with time to spare */
+    if (isDSiMode()) setCpuClock(true);
+    /* the top screen: the 3D engine on BG0; the bottom one: a bitmap the
+     * CPU draws (bottom_nds.c) */
     videoSetMode(MODE_0_3D);
     lcdMainOnTop();
-    consoleDemoInit();
     gfx_nds_init();
+    bottom_nds_init();
     irqSet(IRQ_VBLANK, on_vblank);
     irqEnable(IRQ_VBLANK);
     clock_init();
 
     int save_ok = save_nds_init(argc, argv);
     int snd_ok = audio_nds_init();
-    printf("Pulse Dash (DS)\nsave: %s, sound: %s\n", save_ok ? "ok" : "none", snd_ok ? "ok" : "none");
+    g_nds_stats.save_ok = (uint32_t)save_ok;
+    g_nds_stats.sound_ok = (uint32_t)snd_ok;
     game_init();
     gfx_nds_prepare_outlines();
 
     swiWaitForVBlank();
     uint32_t shown = s_vblanks;
-    uint32_t sum = 0;
     for (;;) {
         uint32_t t0 = clock_now();
         /* a tick a frame shown: one, or as many as the last frame took
@@ -137,9 +159,15 @@ int main(int argc, char **argv)
         /* the sound written ahead; the songs read ahead while the frame
          * has time for it (a read takes up to a few milliseconds) */
         uint32_t t2 = clock_now();
-        audio_nds_update(t2 - t0 < FRAME_CYCLES / 2);
-        uint32_t work = clock_now() - t0;
+        audio_nds_update(t0 + FRAME_CYCLES - FRAME_CYCLES / 8);
         g_nds_stats.audio_last = clock_now() - t2;
+        /* the bottom screen, when what it shows changed and the frame has
+         * time for it */
+        /* the bottom screen, drawn in what is left of the frame (but for
+         * an eighth, against the clock's reading and what runs after) */
+        uint32_t t3 = clock_now();
+        bottom_nds_update(t0 + FRAME_CYCLES - FRAME_CYCLES / 8);
+        uint32_t work = clock_now() - t0, bottom = clock_now() - t3;
         /* (the maxima leave out the first second: start-up) */
         if (g_nds_stats.frames < 60) g_nds_stats.tick_max = g_nds_stats.draw_max = g_nds_stats.audio_max = 0;
         if (g_nds_stats.tick_last > g_nds_stats.tick_max) g_nds_stats.tick_max = g_nds_stats.tick_last;
@@ -148,6 +176,7 @@ int main(int argc, char **argv)
 
         swiWaitForVBlank();
         gfx_nds_vblank();
+        bottom_nds_vblank();
 
         g_nds_stats.frames++;
         if (s_vblanks - now > 1) {
@@ -157,23 +186,16 @@ int main(int argc, char **argv)
             g_nds_stats.late_at[k].tick = g_nds_stats.tick_last;
             g_nds_stats.late_at[k].draw = g_nds_stats.draw_last;
             g_nds_stats.late_at[k].audio = g_nds_stats.audio_last;
+            g_nds_stats.late_at[k].bottom = bottom;
             g_nds_stats.late++;
         }
         g_nds_stats.work_last = work;
         if (work > g_nds_stats.work_max && g_nds_stats.frames >= 60) g_nds_stats.work_max = work;
         g_nds_stats.attempts = game_attempts_started();
-        sum += work;
-        if (g_nds_stats.frames % 300 == 0) {
-            int polys = gfx_nds_max_polys();
-            if ((uint32_t)polys > g_nds_stats.polys_max) g_nds_stats.polys_max = (uint32_t)polys;
-            g_nds_stats.dropped = (uint32_t)gfx_nds_dropped();
-            char status[96];
-            game_status(status, sizeof(status));
-            printf("%lu: %lu%% avg, %lu%% max, late %lu\n polys %d, %s\n", (unsigned long)g_nds_stats.frames,
-                   (unsigned long)(sum / 300 * 100 / FRAME_CYCLES), (unsigned long)(g_nds_stats.work_max * 100 / FRAME_CYCLES),
-                   (unsigned long)g_nds_stats.late, polys, status);
-            sum = 0;
-        }
+        g_nds_stats.sum += work;
+        uint32_t polys = (uint32_t)gfx_nds_max_polys();
+        if (polys > g_nds_stats.polys_max) g_nds_stats.polys_max = polys;
+        g_nds_stats.dropped = (uint32_t)gfx_nds_dropped();
     }
     return 0;
 }

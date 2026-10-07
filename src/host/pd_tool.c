@@ -15,6 +15,7 @@
  *   pd_tool overview <level> <out.bmp>  whole-level map with the solver path
  *   pd_tool xmb <icon0.png> <pic1.png>  the PSP menu's icon (144x80) and background
  *                                       (480x272) for the game (build with PSP=1)
+ *   pd_tool nds-icon <icon.png>         the DS menu's icon (32x32, 15 colours)
  *   pd_tool wav <song> <seconds> <out.wav> [speaker]
  *   pd_tool smoke                       drive the full game through menus and a
  *                                       level with scripted input
@@ -1234,6 +1235,94 @@ static int cmd_xmb(const char *icon0, const char *pic1)
 #endif
 }
 
+/* Median cut: the n colours (rgb, 3 bytes each) brought down to at most
+ * `colors`, each pixel to the mean of its box. */
+static void quantize(uint8_t *rgb, int n, int colors)
+{
+    int *idx = malloc(sizeof(int) * (size_t)n), box[64][2] = {{0, n}}, nbox = 1;
+    for (int i = 0; i < n; i++) idx[i] = i;
+    while (nbox < colors) {
+        /* split the box with the widest channel, at its median */
+        int best = -1, bch = 0, brange = 0;
+        for (int b = 0; b < nbox; b++)
+            for (int c = 0; c < 3; c++) {
+                int lo = 255, hi = 0;
+                for (int i = box[b][0]; i < box[b][1]; i++) {
+                    int v = rgb[idx[i] * 3 + c];
+                    lo = v < lo ? v : lo;
+                    hi = v > hi ? v : hi;
+                }
+                if (hi - lo > brange) {
+                    brange = hi - lo;
+                    best = b;
+                    bch = c;
+                }
+            }
+        if (best < 0) break;
+        int b0 = box[best][0], b1 = box[best][1];
+        for (int i = b0 + 1; i < b1; i++)
+            for (int j = i; j > b0 && rgb[idx[j - 1] * 3 + bch] > rgb[idx[j] * 3 + bch]; j--) {
+                int t = idx[j];
+                idx[j] = idx[j - 1];
+                idx[j - 1] = t;
+            }
+        int mid = (b0 + b1) / 2;
+        box[best][1] = mid;
+        box[nbox][0] = mid;
+        box[nbox][1] = b1;
+        nbox++;
+    }
+    for (int b = 0; b < nbox; b++) {
+        unsigned sum[3] = {0, 0, 0}, m = (unsigned)(box[b][1] - box[b][0]);
+        for (int i = box[b][0]; i < box[b][1]; i++)
+            for (int c = 0; c < 3; c++) sum[c] += rgb[idx[i] * 3 + c];
+        for (int i = box[b][0]; i < box[b][1]; i++)
+            for (int c = 0; c < 3; c++) rgb[idx[i] * 3 + c] = (uint8_t)((sum[c] + m / 2) / (m ? m : 1));
+    }
+    free(idx);
+}
+
+/* The DS's banner icon (32x32, 16 colours, one of them see-through): the
+ * player's cube as it is at the start, over the first level's colours,
+ * drawn by the game and brought down to the icon's 15 (src/nds/icon.png). */
+static int cmd_nds_icon(const char *out)
+{
+    const int k = 8, n = 32;
+    SaveData sd;
+    save_defaults(&sd);
+    Color c1 = g_player_colors[sd.col1], c2 = g_player_colors[sd.col2];
+    const Palette *pal = &g_palettes[0];
+    offscreen_init(n * k, n * k);
+    gfx_sdl_begin(s_ren, (float)k, (float)k);
+    draw_set_pixel_grid(0.0f);
+    gfx_rect_v(0, 0, n, n, pal->bg_top, pal->bg_bot);
+    draw_glow(16, 16, 17, col_with_alpha(c1, 0.45f));
+    icon_draw_cube(16, 16, 22, 0.0f, sd.icon, c1, c2);
+    gfx_sdl_flush();
+    SDL_RenderPresent(s_ren);
+    draw_set_pixel_grid(PIXEL_GRID);
+    uint8_t rgb[32 * 32 * 3];
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) {
+            unsigned sum[3] = {0, 0, 0};
+            for (int sy = 0; sy < k; sy++)
+                for (int sx = 0; sx < k; sx++) {
+                    Uint8 c[3];
+                    Uint32 v = ((const Uint32 *)((const Uint8 *)s_surf->pixels + (y * k + sy) * s_surf->pitch))[x * k + sx];
+                    SDL_GetRGB(v, s_surf->format, &c[0], &c[1], &c[2]);
+                    for (int i = 0; i < 3; i++) sum[i] += c[i];
+                }
+            for (int i = 0; i < 3; i++) rgb[(y * n + x) * 3 + i] = (uint8_t)((sum[i] + k * k / 2) / (k * k));
+        }
+    quantize(rgb, n * n, 15); /* (the 16th: see-through, which ndstool keeps) */
+    if (png_write_rgb(out, rgb, n, n)) {
+        fprintf(stderr, "cannot write %s\n", out);
+        return 1;
+    }
+    printf("wrote %s\n", out);
+    return 0;
+}
+
 static int cmd_prof(int idx)
 {
     if (get_solution(idx) < 0) printf("warning: no solution, playing with no input\n");
@@ -1328,6 +1417,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "smoke")) return cmd_smoke() ? 1 : 0;
     if (!strcmp(cmd, "prof") && argc >= 3) return cmd_prof(level_arg(argv[2]));
     if (!strcmp(cmd, "xmb") && argc >= 4) return cmd_xmb(argv[2], argv[3]);
+    if (!strcmp(cmd, "nds-icon") && argc >= 3) return cmd_nds_icon(argv[2]);
     if (!strcmp(cmd, "ruler") && argc >= 3) return cmd_ruler(level_arg(argv[2]));
     if (!strcmp(cmd, "palettes") && argc >= 3) return cmd_palettes(argv[2], argc > 3 ? (float)atof(argv[3]) : 0.0f) ? 1 : 0;
     if (!strcmp(cmd, "demo")) return cmd_demo(argc > 2 && !strcmp(argv[2], "gen")) ? 1 : 0;

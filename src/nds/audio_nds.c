@@ -5,12 +5,13 @@
  * The music. The songs (music_hp.bin, music_spk.bin: the two mixes of the
  * options' OUTPUT) are in the ROM's file system, 34 MB each, read as they
  * play: blocks of 1024 samples a side (8-bit samples in groups of 32 that
- * share a shift), kept in a cache of CACHE_BLOCKS (1.5 s); each song's
+ * share a shift), kept in a cache of CACHE_BLOCKS (4 s); each song's
  * first FIRST_BLOCKS are kept in memory from the start, so that a song
- * starts at once. The loop reads what is coming, a block or two at a
- * time (0.7 ms a block in melonDS), while a frame has time left
- * (audio_nds_update), and in a busy frame only what is needed in the next
- * quarter of a second. The ARM9 decodes them into a ring of RING 16-bit
+ * starts at once. The loop reads what is coming, up to READ_AHEAD, two
+ * blocks at a time (0.7 ms a block in melonDS), in frames with the time
+ * left for it (audio_nds_update), and in a busy frame only what is
+ * needed in the next quarter of a second: a level's busiest stretches
+ * last a few seconds. The ARM9 decodes them into a ring of RING 16-bit
  * samples a side, which two of the sound hardware's channels play round
  * and round (panned hard left and right), filled AHEAD samples (62 ms,
  * nearly four frames) ahead of where they play, so a frame that runs late
@@ -51,7 +52,7 @@
 
 #define RATE_HZ 32728          /* soundPlaySample's: a timer of 512 (32728.5 Hz) */
 #define RATE_F 32823.633f      /* samples a second of song time: 547.06 a tick (nds_audio.c) */
-#define RING 4096              /* samples a side in the channels' ring */
+#define RING 8192              /* samples a side in the channels' ring (a quarter of a second) */
 #define CHUNK 64               /* the ring is written in chunks of this */
 #define AHEAD 2048             /* samples written ahead of where the channels play */
 #define MARGIN 128             /* changes are written from this far ahead of them */
@@ -62,8 +63,9 @@
 #define GROUP 32
 #define BLOCK_BYTES (2 * (BLOCK / GROUP) * (1 + GROUP))
 #define XFADE 256
-#define CACHE_BLOCKS 48
-#define READ_AHEAD (40 * BLOCK) /* samples of a song the reader keeps ready */
+#define CACHE_BLOCKS 128
+#define READ_AHEAD (120 * BLOCK) /* samples of a song the reader keeps ready (3.7 s) */
+#define READ_COST 60000        /* bus cycles a read of MAX_READ blocks takes, at most (melonDS: 40000) */
 #define MAX_READ 2             /* blocks read at a time, at most (a frame plays half of one) */
 #define SFX_VOICES 4
 #define FIRST_BLOCKS 2         /* each song's first blocks, kept in memory */
@@ -97,6 +99,8 @@ static uint8_t (*s_first)[2][NDS_SONG_COUNT][FIRST_BLOCKS][BLOCK_BYTES];
 /* the block cache */
 static uint8_t s_cache[CACHE_BLOCKS][BLOCK_BYTES] __attribute__((aligned(4)));
 static int32_t s_cache_block[CACHE_BLOCKS]; /* block index of the current song and mix, -1 free */
+#define SONG_BLOCKS 8192       /* blocks a song has at most (4 minutes) */
+static uint8_t s_slot_of[SONG_BLOCKS]; /* a block's slot, if s_cache_block says it holds it */
 static int s_cache_song = -1, s_cache_mix = -1;
 static uint32_t s_cache_use[CACHE_BLOCKS], s_use_clock;
 
@@ -192,12 +196,11 @@ static int cache_find(int32_t b)
 {
     if (b < FIRST_BLOCKS && s_first) return FIRST_SLOT;
     if (s_cache_song != s_song || s_cache_mix != s_mix) cache_reset();
-    for (int i = 0; i < CACHE_BLOCKS; i++)
-        if (s_cache_block[i] == b) {
-            s_cache_use[i] = ++s_use_clock;
-            return i;
-        }
-    return -1;
+    if (b < 0 || b >= SONG_BLOCKS) return -1;
+    int i = s_slot_of[b];
+    if (s_cache_block[i] != b) return -1;
+    s_cache_use[i] = ++s_use_clock;
+    return i;
 }
 
 /* the recording's sample for e (past the loop's end: in the loop), and
@@ -221,7 +224,7 @@ static void read_blocks(int32_t b, int n)
 {
     const SongInfo *si = &s_info[s_mix][s_song];
     static uint8_t buf[MAX_READ * BLOCK_BYTES] __attribute__((aligned(4)));
-    if (b < 0 || b >= (int32_t)si->blocks) return;
+    if (b < 0 || b >= (int32_t)si->blocks || b >= SONG_BLOCKS - MAX_READ) return;
     if (b + n > (int32_t)si->blocks) n = (int)si->blocks - b;
     if (n > MAX_READ) n = MAX_READ;
     if (fseek(s_file[s_mix], (long)(si->offset + (uint32_t)b * BLOCK_BYTES), SEEK_SET)) return;
@@ -238,6 +241,7 @@ static void read_blocks(int32_t b, int n)
         }
         memcpy(s_cache[slot], buf + i * BLOCK_BYTES, BLOCK_BYTES);
         s_cache_block[slot] = b + i;
+        s_slot_of[b + i] = (uint8_t)slot;
         s_cache_use[slot] = ++s_use_clock;
     }
 }
@@ -269,16 +273,25 @@ static inline int16_t clip16(int32_t v)
  * add) */
 static void decode(const uint8_t *blk, int c, int32_t x, int n, int16_t *out, int w, int add)
 {
-    int i = x % BLOCK;
-    const uint8_t *g = blk + (c * (BLOCK / GROUP) + i / GROUP) * (1 + GROUP);
-    int sh = g[0], gain = s_gain * w / XFADE;
-    for (int k = 0; k < n; k++, i++) {
-        if (!(i % GROUP)) {
-            g = blk + (c * (BLOCK / GROUP) + i / GROUP) * (1 + GROUP);
-            sh = g[0];
+    int i = x % BLOCK, gain = s_gain * w / XFADE;
+    while (n > 0) {
+        /* a group's samples at a time: its shift, then bytes */
+        const uint8_t *g = blk + (c * (BLOCK / GROUP) + i / GROUP) * (1 + GROUP);
+        const int8_t *b = (const int8_t *)g + 1 + i % GROUP;
+        int sh = g[0], k = GROUP - i % GROUP;
+        if (k > n) k = n;
+        if (gain == 256 && !add) {
+            /* (as recorded: an 8-bit sample shifted by at most 8 fits) */
+            for (int j = 0; j < k; j++) out[j] = (int16_t)(b[j] << sh);
+        } else {
+            for (int j = 0; j < k; j++) {
+                int32_t v = ((b[j] << sh) * gain) >> 8;
+                out[j] = clip16(add ? out[j] + v : v);
+            }
         }
-        int32_t v = (((int32_t)(int8_t)g[1 + i % GROUP] << sh) * gain) >> 8;
-        out[k] = clip16(add ? out[k] + v : v);
+        out += k;
+        i += k;
+        n -= k;
     }
 }
 
@@ -459,7 +472,11 @@ static void read_ahead(int urgent_only)
     }
 }
 
-void audio_nds_update(int time_left)
+/* For the emulator test (src/host/nds_test.c): the song playing and its
+ * time as heard (samples of song time), as each frame's sound was written */
+volatile int32_t g_audio_song = -1, g_audio_heard;
+
+void audio_nds_update(uint32_t until)
 {
     if (s_want_mix != s_mix) {
         rewind_to_now();
@@ -475,8 +492,16 @@ void audio_nds_update(int time_left)
     else if ((int32_t)(to - s_written) > FILL_MAX)
         to = p + FILL_MIN;
     fill(to);
-    /* (a read takes a few milliseconds from a flash cartridge's card) */
-    read_ahead(!time_left);
+    /* (a read takes a millisecond or two from a flash card's memory card) */
+    read_ahead((int32_t)(until - nds_clock()) < READ_COST);
+    g_audio_song = s_song;
+    g_audio_heard = (int32_t)(audio_song_time() * RATE_F + 0.5f);
+}
+
+void audio_nds_hold(void)
+{
+    /* as far as the ring holds, but for a little */
+    fill(play_now() + RING - 4 * CHUNK);
 }
 
 uint32_t audio_nds_play_pos(void)

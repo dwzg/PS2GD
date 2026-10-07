@@ -31,5 +31,9 @@
 /* circles cut into as many segments as the screen's pixels show (draw.c):
  * by their radius in device pixels */
 #define CURVE_DETAIL PIXEL_GRID
+/* icons' parts snapped to whole pixels by multiplying by the grid's
+ * inverse rather than dividing by the grid (icons.c): a float division is
+ * a call of a hundred instructions here */
+#define SNAP_BY_RECIPROCAL 1
 
 #endif

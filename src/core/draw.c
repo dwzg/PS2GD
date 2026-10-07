@@ -43,14 +43,28 @@ static float stroke(float w, float grid)
     return (n < 1.0f ? 1.0f : n) / grid;
 }
 
+/* (the same few widths are asked for again and again, a level's frame
+ * hundreds of times: the last one's answer is kept) */
 float grid_w(float w)
 {
-    return stroke(w, s_grid);
+    static float last_w = -1.0f, last_g = -1.0f, last;
+    if (w != last_w || s_grid != last_g) {
+        last_w = w;
+        last_g = s_grid;
+        last = stroke(w, s_grid);
+    }
+    return last;
 }
 
 float grid_h(float h)
 {
-    return stroke(h, s_grid_y);
+    static float last_h = -1.0f, last_g = -1.0f, last;
+    if (h != last_h || s_grid_y != last_g) {
+        last_h = h;
+        last_g = s_grid_y;
+        last = stroke(h, s_grid_y);
+    }
+    return last;
 }
 
 /* A sixty-fourth of a pixel past the edge: rounding errors stay on that side
@@ -79,6 +93,9 @@ float grid_snap_y(float v)
 #ifndef CURVE_DETAIL
 #define CURVE_DETAIL 1.0f
 #endif
+/* segments of a whole ellipse ring (draw_ellipse_ring: the portals), half
+ * as many at most on a coarse screen */
+#define RING_SEGS (24.0f * (CURVE_DETAIL > 0.5f ? CURVE_DETAIL : 0.5f))
 
 /* Pick a step through the circle table based on on-screen radius. */
 static int seg_step(float r)
@@ -196,7 +213,7 @@ void draw_arc(float cx, float cy, float r_in, float r_out, float a0, float a1, C
 void draw_ellipse_ring(float cx, float cy, float rx, float ry, float thick, Color c,
                        float a0, float a1)
 {
-    int n = (int)(fabsf(a1 - a0) / (2.0f * PI) * 24.0f) + 1;
+    int n = (int)(fabsf(a1 - a0) / (2.0f * PI) * RING_SEGS) + 1;
     float step = (a1 - a0) / n;
     float c1 = cosf(a0), s1 = sinf(a0);
     for (int i = 0; i < n; i++) {

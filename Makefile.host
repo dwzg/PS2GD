@@ -9,12 +9,15 @@
 #   make -f Makefile.host NDS=1 ...  -> the same in the DS's layout, in build/host-nds/
 #   make -f Makefile.host PSP=1 psp-art  -> redraw the PSP's XMB icon and background
 #                                       (src/psp/ICON0.PNG, PIC1.PNG)
+#   make -f Makefile.host nds-art    -> redraw the DS menu's icon (src/nds/icon.png)
 #   make -f Makefile.host build/host/gbc_tool  -> the Game Boy Color data tool
 #                                       (Makefile.gbc builds and uses it)
 #   make -f Makefile.host build/host/gba_tool  -> the Game Boy Advance data tool
 #                                       (Makefile.gba builds and uses it)
 #   make -f Makefile.host build/host/nds_tool  -> the Nintendo DS data tool
 #                                       (scripts/build-nds.sh builds and uses it)
+#   make -f Makefile.host build/host/nds_test  -> the DS ROM's emulator test
+#                                       (scripts/nds-emu-test.sh builds and runs it)
 
 CC ?= cc
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -63,6 +66,14 @@ $(OUT)/gba_tool: $(CORE_OBJ) $(VECTOR_OBJ) $(GBA_TOOL_OBJ)
 $(OUT)/nds_tool: $(OUT)/core/audio.o $(OUT)/core/songs.o $(NDS_TOOL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
+# runs the DS ROM in melonDS's libretro core (loaded at run time: the
+# path is nds_test's argument), with the physics and the solver for the
+# reference runs
+NDS_TEST_OBJ := $(OUT)/host/nds_test.o $(OUT)/host/png_write.o $(OUT)/host/solver.o $(OUT)/core/sim.o \
+                $(OUT)/core/level.o $(patsubst src/%.c,$(OUT)/%.o,$(wildcard src/levels/*.c))
+$(OUT)/nds_test: $(NDS_TEST_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ -ldl -lm
+
 # runs the GBA ROM in mGBA's core (needs libmgba-dev), with the physics
 # and the solver for the reference runs
 GBA_TEST_OBJ := $(OUT)/host/gba_test.o $(OUT)/host/png_write.o $(OUT)/host/solver.o $(OUT)/core/sim.o \
@@ -97,7 +108,10 @@ psp-art: $(OUT)/pd_tool
 	@test "$(PSP)" = 1 || { echo "psp-art needs PSP=1"; exit 1; }
 	$(OUT)/pd_tool xmb src/psp/ICON0.PNG src/psp/PIC1.PNG
 
+nds-art: $(OUT)/pd_tool
+	$(OUT)/pd_tool nds-icon src/nds/icon.png
+
 clean:
 	rm -rf $(OUT)
 
-.PHONY: all test test-full psp-art clean FORCE
+.PHONY: all test test-full psp-art nds-art clean FORCE

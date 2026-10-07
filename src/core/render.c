@@ -149,8 +149,14 @@ static void corner_glow(float x, float y, float dx, float dy, float gw, Color gc
 void render_spike(float sx, float sy_base, float w, float h, int down, Color fill, Color edge)
 {
     float tipy = down ? sy_base + h : sy_base - h;
-    /* dark body that lightens towards the tip, thick bright outline */
-    Color top = col_lerp(col_scale(fill, 2.2f), edge, 0.16f);
+    /* dark body that lightens towards the tip, thick bright outline (its
+     * colour the same for every spike of a frame: kept) */
+    static Color last_fill, last_edge, top;
+    if (fill != last_fill || edge != last_edge || !top) {
+        last_fill = fill;
+        last_edge = edge;
+        top = col_lerp(col_scale(fill, 2.2f), edge, 0.16f);
+    }
     gfx_tri(sx, sy_base, fill, sx + w, sy_base, fill, sx + w * 0.5f, tipy, top);
     float lw = grid_w(3.0f), lh = grid_h(3.0f);
     draw_line(sx + 1, sy_base, sx + w * 0.5f, tipy, lw, edge);
@@ -303,6 +309,11 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
     int c1 = clampi((int)floorf(v->cam_x + SCREEN_W / B) + 2, 0, L->width);
     int r0 = clampi((int)floorf(v->cam_y) - 1, 0, L->height);
     int r1 = clampi((int)floorf(v->cam_y + SCREEN_H / B) + 1, 0, L->height);
+    /* each visible column's left and each row's bottom on the screen,
+     * worked out once for the three passes over the blocks below */
+    float col_x[(int)(SCREEN_W / 34) + 6], row_y[(int)(SCREEN_H / 34) + 4];
+    for (int cx = c0; cx < c1; cx++) col_x[cx - c0] = view_sx(v, (float)cx);
+    for (int cy = r0; cy < r1; cy++) row_y[cy - r0] = view_sy(v, (float)cy);
 
     /* end gate glow */
     {
@@ -327,8 +338,8 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
             int t = L->grid[cy * L->width + cx];
             if (!t) continue;
             uint8_t e = L->edges[cy * L->width + cx];
-            float x0 = view_sx(v, (float)cx), x1 = x0 + B;
-            float y1 = view_sy(v, (float)cy), y0 = y1 - B;
+            float x0 = col_x[cx - c0], x1 = x0 + B;
+            float y1 = row_y[cy - r0], y0 = y1 - B;
             if (t == OBJ_SLAB_LO) y0 = y1 - B * 0.5f;
             else if (t == OBJ_SLAB_HI) y1 = y0 + B * 0.5f;
             if (e & EDGE_T) gfx_rect_v(x0, y0 - gw, x1, y0, gz, gc);
@@ -360,21 +371,21 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
     gfx_blend(BLEND_ALPHA);
 
     /* block fills */
+    const Color f = pal->block_fill, f_top = col_lerp(f, pal->block_edge, 0.10f);
+    const Color deco = col_with_alpha(pal->block_edge, 0.28f);
     for (int cy = r0; cy < r1; cy++) {
         for (int cx = c0; cx < c1; cx++) {
             int t = L->grid[cy * L->width + cx];
             if (!t) continue;
-            float x0 = view_sx(v, (float)cx), x1 = x0 + B;
-            float y1 = view_sy(v, (float)cy), y0 = y1 - B;
+            float x0 = col_x[cx - c0], x1 = x0 + B;
+            float y1 = row_y[cy - r0], y0 = y1 - B;
             if (t == OBJ_SLAB_LO) y0 = y1 - B * 0.5f;
             else if (t == OBJ_SLAB_HI) y1 = y0 + B * 0.5f;
-            Color f = pal->block_fill;
-            gfx_rect_v(x0, y0, x1, y1, col_lerp(f, pal->block_edge, 0.10f), f);
+            gfx_rect_v(x0, y0, x1, y1, f_top, f);
             uint32_t h = hash_u32((uint32_t)(cx * 73856093) ^ (uint32_t)(cy * 19349663));
             if (t == OBJ_BLOCK && (h % 5) == 0) {
                 float in = B * 0.24f;
-                draw_rect_outline(x0 + in, y0 + in, x1 - in, y1 - in, 2.0f,
-                                  col_with_alpha(pal->block_edge, 0.28f));
+                draw_rect_outline(x0 + in, y0 + in, x1 - in, y1 - in, 2.0f, deco);
             }
         }
     }
@@ -386,8 +397,8 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
             int t = L->grid[cy * L->width + cx];
             if (!t) continue;
             uint8_t e = L->edges[cy * L->width + cx];
-            float x0 = view_sx(v, (float)cx), x1 = x0 + B;
-            float y1 = view_sy(v, (float)cy), y0 = y1 - B;
+            float x0 = col_x[cx - c0], x1 = x0 + B;
+            float y1 = row_y[cy - r0], y0 = y1 - B;
             if (t == OBJ_SLAB_LO) y0 = y1 - B * 0.5f;
             else if (t == OBJ_SLAB_HI) y1 = y0 + B * 0.5f;
             if (e & EDGE_T) gfx_rect(x0, y0, x1, y0 + eh, ec);

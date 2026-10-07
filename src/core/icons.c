@@ -15,11 +15,20 @@
 typedef struct {
     float cx, cy, s, co, si, fy;
     float grid, grid_y; /* > 0: round offsets to this many device pixels per virtual one */
+    float inv_grid, inv_grid_y;
 } Xf;
+
+/* A target where a float division is a call of a hundred instructions (the
+ * DS: target.h) may ask for the rounded offsets to be multiplied by the
+ * grid's inverse instead of divided by the grid: the same to a few
+ * millionths of a pixel. */
+#ifndef SNAP_BY_RECIPROCAL
+#define SNAP_BY_RECIPROCAL 0
+#endif
 
 static Xf xf_make(float cx, float cy, float s, float angle, int flip)
 {
-    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f, 0.0f};
+    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     float g = draw_pixel_grid();
     if (g > 0.0f) {
         t.cx = grid_snap(cx);
@@ -31,6 +40,8 @@ static Xf xf_make(float cx, float cy, float s, float angle, int flip)
             t.si = k == 1 ? 1.0f : (k == 3 ? -1.0f : 0.0f);
             t.grid = g;
             t.grid_y = draw_pixel_grid_y();
+            t.inv_grid = 1.0f / t.grid;
+            t.inv_grid_y = 1.0f / t.grid_y;
         }
     }
     return t;
@@ -41,8 +52,13 @@ static void xf_pt(const Xf *t, float lx, float ly, float *ox, float *oy)
     ly *= t->fy;
     float dx = (lx * t->co - ly * t->si) * t->s, dy = (lx * t->si + ly * t->co) * t->s;
     if (t->grid > 0.0f) {
+#if SNAP_BY_RECIPROCAL
+        dx = roundf(dx * t->grid) * t->inv_grid;
+        dy = roundf(dy * t->grid_y) * t->inv_grid_y;
+#else
         dx = roundf(dx * t->grid) / t->grid;
         dy = roundf(dy * t->grid_y) / t->grid_y;
+#endif
     }
     *ox = t->cx + dx;
     *oy = t->cy + dy;
@@ -79,10 +95,12 @@ static void lellipse(const Xf *t, float ox, float oy, float rx, float ry, Color 
     xf_pt(t, ox, oy, &cx, &cy);
     int steps = half ? n / 2 : n;
     float a0 = half ? PI : 0.0f;
+    float x1, y1;
+    xf_pt(t, ox + cosf(a0) * rx, oy + sinf(a0) * ry, &x1, &y1);
     for (int i = 0; i < steps; i++) {
-        float t0 = a0 + (float)i / n * 2.0f * PI, t1 = a0 + (float)(i + 1) / n * 2.0f * PI;
-        float x0, y0, x1, y1;
-        xf_pt(t, ox + cosf(t0) * rx, oy + sinf(t0) * ry, &x0, &y0);
+        /* the last segment's end is this one's start */
+        float t1 = a0 + (float)(i + 1) / n * 2.0f * PI;
+        float x0 = x1, y0 = y1;
         xf_pt(t, ox + cosf(t1) * rx, oy + sinf(t1) * ry, &x1, &y1);
         gfx_tri(cx, cy, c, x0, y0, c, x1, y1, c);
     }

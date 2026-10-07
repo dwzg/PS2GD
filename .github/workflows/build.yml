@@ -1,8 +1,8 @@
 name: build
 
 # Every push and pull request: build the PS2 ELF and the PSP EBOOT and run
-# the level tests; build the Game Boy Color demo ROM and the Game Boy
-# Advance ROM and play their levels in an emulator. Pushing a version tag
+# the level tests; build the Game Boy Color demo ROM, the Game Boy Advance
+# ROM and the Nintendo DS ROM and play their levels in an emulator. Pushing a version tag
 # (v1.2.0, or v1.3.0-rc1 for a pre-release) also publishes a GitHub
 # release with all the builds once their jobs pass.
 on:
@@ -126,10 +126,33 @@ jobs:
           name: pulsedash-gba
           path: build/gba/pulsedash.gba
 
+  nds:
+    name: Nintendo DS ROM and emulator test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the version shown on the title screen
+      - name: Install SDL2 (the host tools)
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Build (the songs recorded by nds_tool, then the ROM in the BlocksDS image)
+        run: scripts/build-nds.sh
+      - name: Cache melonDS's libretro core
+        uses: actions/cache@v4
+        with:
+          path: build/melonds/melonds_libretro.so
+          key: melonds-${{ runner.os }}-${{ hashFiles('scripts/nds-emu-test.sh') }}
+      - name: Play every level in an emulator (melonDS), as the reference on every tick, each frame on time, in time with the music
+        run: scripts/nds-emu-test.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulsedash-nds
+          path: build/nds/pulsedash.nds
+
   release:
     name: GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ps2, psp, host, gbc, gba]
+    needs: [ps2, psp, host, gbc, gba, nds]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -151,6 +174,10 @@ jobs:
         with:
           name: pulsedash-gba
           path: gba
+      - uses: actions/download-artifact@v4
+        with:
+          name: pulsedash-nds
+          path: nds
       - name: Package
         run: |
           ver="$GITHUB_REF_NAME"
@@ -172,8 +199,14 @@ jobs:
           mkdir -p "pkg-gba/pulsedash-$ver-gba"
           cp gba/pulsedash.gba README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md docs/GBA_PORT.md "pkg-gba/pulsedash-$ver-gba/"
           (cd pkg-gba && zip -r "../dist/pulsedash-$ver-gba.zip" "pulsedash-$ver-gba")
+          # Nintendo DS: the same
+          cp nds/pulsedash.nds "dist/pulsedash-$ver.nds"
+          mkdir -p "pkg-nds/pulsedash-$ver-nds"
+          cp nds/pulsedash.nds README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md docs/NDS_PORT.md "pkg-nds/pulsedash-$ver-nds/"
+          (cd pkg-nds && zip -r "../dist/pulsedash-$ver-nds.zip" "pulsedash-$ver-nds")
           (cd dist && sha256sum PULSEDASH.ELF "pulsedash-$ver.zip" "pulsedash-$ver-psp.zip" "pulsedash-$ver.gbc" \
-              "pulsedash-$ver-gbc.zip" "pulsedash-$ver.gba" "pulsedash-$ver-gba.zip" > SHA256SUMS)
+              "pulsedash-$ver-gbc.zip" "pulsedash-$ver.gba" "pulsedash-$ver-gba.zip" "pulsedash-$ver.nds" \
+              "pulsedash-$ver-nds.zip" > SHA256SUMS)
           ls -l dist
       - name: Release notes
         run: |
@@ -202,6 +235,10 @@ jobs:
             echo "a Game Boy Advance, Nintendo DS (Lite) or Analogue Pocket from a flash cartridge that takes 32 MB ROMs and has SRAM."
             echo "\`pulsedash-$ver-gba.zip\` holds the same ROM with the README, changelog, licenses and docs/GBA_PORT.md."
             echo ""
+            echo "**Nintendo DS:** copy \`pulsedash-$ver.nds\` to a flash card's memory card (or a DSi's or 3DS's SD card,"
+            echo "for TWiLight Menu++) and start it from its menu, or open it in melonDS. Progress is saved in \`PULSEDASH.DAT\`"
+            echo "next to it. \`pulsedash-$ver-nds.zip\` holds the same ROM with the README, changelog, licenses and docs/NDS_PORT.md."
+            echo ""
             cat changes.md
           } > notes.md
           cat notes.md
@@ -216,4 +253,4 @@ jobs:
             --title "Pulse Dash $ver" --notes "$(cat notes.md)" --generate-notes \
             dist/PULSEDASH.ELF "dist/pulsedash-$ver.zip" "dist/pulsedash-$ver-psp.zip" \
             "dist/pulsedash-$ver.gbc" "dist/pulsedash-$ver-gbc.zip" "dist/pulsedash-$ver.gba" \
-            "dist/pulsedash-$ver-gba.zip" dist/SHA256SUMS
+            "dist/pulsedash-$ver-gba.zip" "dist/pulsedash-$ver.nds" "dist/pulsedash-$ver-nds.zip" dist/SHA256SUMS

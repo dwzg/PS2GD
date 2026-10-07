@@ -65,6 +65,7 @@
 #define Z_FIRST (-4000)
 
 static int s_z;
+static int s_bottom; /* drawing on the bottom screen (soft_nds.c) */
 static int s_polys, s_dropped, s_max_polys;
 static int s_blend;
 static uint32_t s_attr = 0xFFFFFFFFu; /* the polygon attributes set last */
@@ -280,6 +281,16 @@ void gfx_nds_begin(void)
     s_blend = BLEND_ALPHA;
 }
 
+void gfx_nds_bottom_begin(void)
+{
+    s_bottom = 1;
+}
+
+void gfx_nds_bottom_end(void)
+{
+    s_bottom = 0;
+}
+
 void gfx_nds_end(void)
 {
     if (s_polys > s_max_polys) s_max_polys = s_polys;
@@ -308,6 +319,12 @@ static inline unsigned amax3(unsigned a, unsigned b, unsigned c)
 
 void gfx_tri(float x0, float y0, Color c0, float x1, float y1, Color c1, float x2, float y2, Color c2)
 {
+    if (s_bottom) {
+        int16_t v[6] = {vx(x0), vx(y0), vx(x1), vx(y1), vx(x2), vx(y2)};
+        Color c[3] = {c0, c1, c2};
+        soft_tri(v, c);
+        return;
+    }
     unsigned a0 = COL_A(c0), a1 = COL_A(c1), a2 = COL_A(c2);
     int r = prim_begin(amin3(a0, a1, a2), amax3(a0, a1, a2), c0 ^ (c1 * 3u) ^ (c2 * 7u));
     if (!r) return;
@@ -325,6 +342,13 @@ void gfx_tri(float x0, float y0, Color c0, float x1, float y1, Color c1, float x
 
 static void quad(const int16_t *v, const Color *c)
 {
+    if (s_bottom) {
+        int16_t a[6] = {v[0], v[1], v[2], v[3], v[4], v[5]}, b[6] = {v[0], v[1], v[4], v[5], v[6], v[7]};
+        Color ca[3] = {c[0], c[1], c[2]}, cb[3] = {c[0], c[2], c[3]};
+        soft_tri(a, ca);
+        soft_tri(b, cb);
+        return;
+    }
     unsigned a0 = COL_A(c[0]), a1 = COL_A(c[1]), a2 = COL_A(c[2]), a3 = COL_A(c[3]);
     unsigned lo = amin3(a0, a1, a2), hi = amax3(a0, a1, a2);
     if (a3 < lo) lo = a3;
@@ -350,6 +374,12 @@ static void rect4(float x0, float y0, float x1, float y1, Color tl, Color tr, Co
 {
     int16_t a = vx(x0), b = vx(y0), c = vx(x1), d = vx(y1);
     if (a == c || b == d) return; /* under a sixteenth of a pixel */
+    if (s_bottom && tl == tr && bl == br) {
+        /* (the pixels whose middles it covers) */
+        int px0 = (a < c ? a : c) + 8, px1 = (a < c ? c : a) + 8, py0 = (b < d ? b : d) + 8, py1 = (b < d ? d : b) + 8;
+        soft_rect(px0 >> 4, py0 >> 4, px1 >> 4, py1 >> 4, b < d ? tl : bl, b < d ? bl : tl);
+        return;
+    }
     int16_t v[8] = {a, b, c, b, c, d, a, d};
     Color col[4] = {tl, tr, br, bl};
     quad(v, col);
@@ -357,6 +387,7 @@ static void rect4(float x0, float y0, float x1, float y1, Color tl, Color tr, Co
 
 int gfx_glow(float cx, float cy, float r, Color c)
 {
+    if (s_bottom) return 0;
     unsigned a = COL_A(c);
     if (a < 8) return 1;
     if (s_polys >= MAX_POLYS) {
@@ -550,6 +581,7 @@ static void textured_quad(int x0, int y0, int x1, int y1, uint32_t u0, uint32_t 
 
 int gfx_glyph_outline_dev(int x, int y, int px, int py, int ox, int oy, unsigned char ch, Color c)
 {
+    if (s_bottom) return 0; /* (font.c draws them as rectangles) */
     const OutlineSet *o = outline_set(px, py, ox, oy);
     if (!o) return 0;
     if (!textured_begin(o->param, c, c)) return 1;
@@ -562,6 +594,11 @@ int gfx_glyph_outline_dev(int x, int y, int px, int py, int ox, int oy, unsigned
 
 void gfx_glyph_dev(int x, int y, int px, int py, unsigned char ch, Color top, Color bottom)
 {
+    if (s_bottom) {
+        uint8_t rows[7];
+        if (font_glyph((char)ch, rows)) soft_glyph(x, y, px, py, rows, top, bottom);
+        return;
+    }
     if (!textured_begin(s_font_param, top, bottom)) return;
     /* the cell's texels, in 1/16, a sixteenth in from its corner */
     uint32_t u0 = (uint32_t)((ch % 16) * 8 * 16 + 1), v0 = (uint32_t)((ch / 16) * 8 * 16 + 1);
@@ -570,6 +607,10 @@ void gfx_glyph_dev(int x, int y, int px, int py, unsigned char ch, Color top, Co
 
 void gfx_rect_dev(int x0, int y0, int x1, int y1, Color top, Color bottom)
 {
+    if (s_bottom) {
+        soft_rect(x0, y0, x1, y1, top, bottom);
+        return;
+    }
     if (x0 >= x1 || y0 >= y1) return;
     int16_t a = (int16_t)(x0 * SUB), b = (int16_t)(y0 * SUB), c = (int16_t)(x1 * SUB), d = (int16_t)(y1 * SUB);
     int16_t v[8] = {a, b, c, b, c, d, a, d};
