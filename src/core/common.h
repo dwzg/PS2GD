@@ -43,6 +43,12 @@
 #define FLICKER_OPTION 0
 #endif
 
+/* help texts name the face buttons by letter (font.c: the DS's) rather
+ * than by the PlayStation's symbols */
+#ifndef FACE_BUTTON_LETTERS
+#define FACE_BUTTON_LETTERS 0
+#endif
+
 /* x in a layout drawn for a 640-wide screen, centred on this one */
 #define UI_X(x) ((x) + (SCREEN_W - 640) / 2)
 

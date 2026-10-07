@@ -73,9 +73,17 @@ float grid_snap_y(float v)
     return snap(v, s_grid_y);
 }
 
+/* How finely circles are cut, by their radius in virtual pixels times this:
+ * a target with a coarse screen (the DS: a virtual pixel is 0.43 of its
+ * own) asks for fewer segments, as many as its pixels show (target.h). */
+#ifndef CURVE_DETAIL
+#define CURVE_DETAIL 1.0f
+#endif
+
 /* Pick a step through the circle table based on on-screen radius. */
 static int seg_step(float r)
 {
+    r *= CURVE_DETAIL;
     if (r < 6.0f) return 6;  /* 8 segments */
     if (r < 14.0f) return 4; /* 12 */
     if (r < 40.0f) return 2; /* 24 */
@@ -113,11 +121,14 @@ void draw_rect_outline(float x0, float y0, float x1, float y1, float w, Color c)
 void draw_circle_grad(float cx, float cy, float r, Color inner, Color outer)
 {
     int st = seg_step(r);
+    /* each point once: it ends one segment and starts the next */
+    float x0 = cx + s_cos[0] * r, y0 = cy + s_sin[0] * r;
     for (int i = 0; i < CIRCLE_SEGS; i += st) {
         int j = i + st;
-        gfx_tri(cx, cy, inner,
-                cx + s_cos[i] * r, cy + s_sin[i] * r, outer,
-                cx + s_cos[j] * r, cy + s_sin[j] * r, outer);
+        float x1 = cx + s_cos[j] * r, y1 = cy + s_sin[j] * r;
+        gfx_tri(cx, cy, inner, x0, y0, outer, x1, y1, outer);
+        x0 = x1;
+        y0 = y1;
     }
 }
 
@@ -140,16 +151,21 @@ void draw_ellipse(float cx, float cy, float rx, float ry, Color c)
 void draw_ring_grad(float cx, float cy, float r_in, float r_out, Color c_in, Color c_out)
 {
     int st = seg_step(r_out);
+    float xi = cx + s_cos[0] * r_in, yi = cy + s_sin[0] * r_in;
+    float xo = cx + s_cos[0] * r_out, yo = cy + s_sin[0] * r_out;
     for (int i = 0; i < CIRCLE_SEGS; i += st) {
         int j = i + st;
         float xy[8] = {
-            cx + s_cos[i] * r_in, cy + s_sin[i] * r_in,
-            cx + s_cos[i] * r_out, cy + s_sin[i] * r_out,
+            xi, yi, xo, yo,
             cx + s_cos[j] * r_out, cy + s_sin[j] * r_out,
             cx + s_cos[j] * r_in, cy + s_sin[j] * r_in,
         };
         Color c[4] = {c_in, c_out, c_out, c_in};
         gfx_quad(xy, c);
+        xo = xy[4];
+        yo = xy[5];
+        xi = xy[6];
+        yi = xy[7];
     }
 }
 
@@ -162,9 +178,12 @@ void draw_arc(float cx, float cy, float r_in, float r_out, float a0, float a1, C
 {
     int n = (int)(fabsf(a1 - a0) / (2.0f * PI) * CIRCLE_SEGS / seg_step(r_out)) + 1;
     float step = (a1 - a0) / n;
+    float c1 = cosf(a0), s1 = sinf(a0);
     for (int i = 0; i < n; i++) {
-        float t0 = a0 + step * i, t1 = t0 + step;
-        float c0 = cosf(t0), s0 = sinf(t0), c1 = cosf(t1), s1 = sinf(t1);
+        /* the last segment's end is this one's start */
+        float c0 = c1, s0 = s1, t1 = a0 + step * (i + 1);
+        c1 = cosf(t1);
+        s1 = sinf(t1);
         float xy[8] = {
             cx + c0 * r_in, cy + s0 * r_in, cx + c0 * r_out, cy + s0 * r_out,
             cx + c1 * r_out, cy + s1 * r_out, cx + c1 * r_in, cy + s1 * r_in,
@@ -179,9 +198,11 @@ void draw_ellipse_ring(float cx, float cy, float rx, float ry, float thick, Colo
 {
     int n = (int)(fabsf(a1 - a0) / (2.0f * PI) * 24.0f) + 1;
     float step = (a1 - a0) / n;
+    float c1 = cosf(a0), s1 = sinf(a0);
     for (int i = 0; i < n; i++) {
-        float t0 = a0 + step * i, t1 = t0 + step;
-        float c0 = cosf(t0), s0 = sinf(t0), c1 = cosf(t1), s1 = sinf(t1);
+        float c0 = c1, s0 = s1, t1 = a0 + step * (i + 1);
+        c1 = cosf(t1);
+        s1 = sinf(t1);
         float xy[8] = {
             cx + c0 * (rx - thick), cy + s0 * (ry - thick),
             cx + c0 * rx, cy + s0 * ry,

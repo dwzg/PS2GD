@@ -326,12 +326,14 @@ static void draw_output_help(void)
 {
     render_panel(UI_X(60), 268, UI_X(580), 428, RGBA(0, 0, 0, 190), RGBA(255, 255, 255, 60));
     font_draw(UI_X(80), 282, 2.0f, RGB(255, 240, 160), ALIGN_LEFT, "OUTPUT");
-    font_draw(UI_X(80), 304, 2.0f, COL_WHITE, ALIGN_LEFT, "SPEAKERS: MIXED FOR THE " TARGET_NAME "'S OWN SPEAKERS,");
-    font_draw(UI_X(80), 322, 2.0f, COL_WHITE, ALIGN_LEFT, "THE BASS THEY CAN'T PLAY CUT, LOUDER.");
-    font_draw(UI_X(80), 350, 2.0f, COL_WHITE, ALIGN_LEFT, "HEADPHONES: THE FULL MIX.");
+    /* lines of 34 letters at most: the DS's panel holds no more */
+    font_draw(UI_X(80), 304, 2.0f, COL_WHITE, ALIGN_LEFT, "SPEAKERS: MIXED FOR THE " TARGET_NAME "'S OWN");
+    font_draw(UI_X(80), 322, 2.0f, COL_WHITE, ALIGN_LEFT, "SPEAKERS, THE BASS THEY CAN'T PLAY");
+    font_draw(UI_X(80), 340, 2.0f, COL_WHITE, ALIGN_LEFT, "CUT, LOUDER.");
+    font_draw(UI_X(80), 368, 2.0f, COL_WHITE, ALIGN_LEFT, "HEADPHONES: THE FULL MIX.");
 #if AUDIO_OUTPUT_AUTO
-    font_draw(UI_X(80), 378, 2.0f, COL_WHITE, ALIGN_LEFT, "AUTO: SPEAKERS, OR HEADPHONES WHEN");
-    font_draw(UI_X(80), 396, 2.0f, COL_WHITE, ALIGN_LEFT, "THEY ARE PLUGGED IN.");
+    font_draw(UI_X(80), 386, 2.0f, COL_WHITE, ALIGN_LEFT, "AUTO: SPEAKERS, OR HEADPHONES WHEN");
+    font_draw(UI_X(80), 404, 2.0f, COL_WHITE, ALIGN_LEFT, "THEY ARE PLUGGED IN.");
 #endif
 }
 #endif

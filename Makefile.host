@@ -6,12 +6,15 @@
 #   make -f Makefile.host test-full  -> also prove levels beatable at 30 and 20 Hz input
 #   make -f Makefile.host PSP=1 ...  -> the same in the PSP's widescreen layout, in
 #                                       build/host-psp/ (to try it on a PC)
+#   make -f Makefile.host NDS=1 ...  -> the same in the DS's layout, in build/host-nds/
 #   make -f Makefile.host PSP=1 psp-art  -> redraw the PSP's XMB icon and background
 #                                       (src/psp/ICON0.PNG, PIC1.PNG)
 #   make -f Makefile.host build/host/gbc_tool  -> the Game Boy Color data tool
 #                                       (Makefile.gbc builds and uses it)
 #   make -f Makefile.host build/host/gba_tool  -> the Game Boy Advance data tool
 #                                       (Makefile.gba builds and uses it)
+#   make -f Makefile.host build/host/nds_tool  -> the Nintendo DS data tool
+#                                       (scripts/build-nds.sh builds and uses it)
 
 CC ?= cc
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -24,6 +27,9 @@ LDLIBS := $(SDL_LIBS) -lm
 ifeq ($(PSP),1)
 CFLAGS += -DPD_PSP
 OUT := build/host-psp
+else ifeq ($(NDS),1)
+CFLAGS += -DPD_NDS
+OUT := build/host-nds
 else
 OUT := build/host
 endif
@@ -34,6 +40,7 @@ GAME_OBJ := $(OUT)/host/main_sdl.o $(OUT)/host/gfx_sdl.o
 TOOL_OBJ := $(OUT)/host/pd_tool.o $(OUT)/host/solver.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o
 GBC_TOOL_OBJ := $(OUT)/host/gbc_tool.o $(OUT)/host/solver.o $(OUT)/host/gfx_sdl.o $(OUT)/host/png_write.o \
                 $(OUT)/gbc/gbsim.o $(OUT)/gbc/gbcells.o $(OUT)/gbc/tileset.o
+NDS_TOOL_OBJ := $(OUT)/host/nds_tool.o $(OUT)/host/nds_audio.o
 GBA_TOOL_OBJ := $(OUT)/host/gba_tool.o $(OUT)/host/gba_art.o $(OUT)/host/gba_art_obj.o $(OUT)/host/gba_audio.o $(OUT)/host/gfx_sdl.o \
                 $(OUT)/host/png_write.o $(OUT)/host/gba_levels.o $(OUT)/gba/cellmap.o
 
@@ -51,6 +58,11 @@ $(OUT)/gbc_tool: $(CORE_OBJ) $(VECTOR_OBJ) $(GBC_TOOL_OBJ)
 $(OUT)/gba_tool: $(CORE_OBJ) $(VECTOR_OBJ) $(GBA_TOOL_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+# the DS ROM's songs and sound effects, recorded with the game's synth;
+# the synthesizer and its songs alone
+$(OUT)/nds_tool: $(OUT)/core/audio.o $(OUT)/core/songs.o $(NDS_TOOL_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ -lm
+
 # runs the GBA ROM in mGBA's core (needs libmgba-dev), with the physics
 # and the solver for the reference runs
 GBA_TEST_OBJ := $(OUT)/host/gba_test.o $(OUT)/host/png_write.o $(OUT)/host/solver.o $(OUT)/core/sim.o \
@@ -65,7 +77,7 @@ $(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
 $(OUT)/core/version.o: FORCE
 FORCE:
 
-$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h) $(wildcard src/gba/*.h) src/ps2/target.h src/psp/target.h
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/host/*.h) $(wildcard src/gbc/*.h) $(wildcard src/gba/*.h) src/ps2/target.h src/psp/target.h src/nds/target.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

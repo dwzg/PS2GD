@@ -77,6 +77,12 @@ static const char *const FONT_SRC[] = {
 
 static uint8_t s_glyph[128][7];
 static uint8_t s_has[128];
+#ifdef GFX_DEVICE_RECTS
+/* each glyph's runs (font.c's for_each_run_dev): row << 4 | first column,
+ * then the column after the last; at most 3 runs a row */
+static uint8_t s_runs[128][7 * 3][2];
+static uint8_t s_nruns[128];
+#endif
 
 void font_init(void)
 {
@@ -92,6 +98,20 @@ void font_init(void)
             s_glyph[ch][r] = bits;
         }
         s_has[ch] = 1;
+#ifdef GFX_DEVICE_RECTS
+        s_nruns[ch] = 0;
+        for (int r = 0; r < 7; r++) {
+            int c = 0;
+            while (c < 5) {
+                if (!(s_glyph[ch][r] & (1u << (4 - c)))) { c++; continue; }
+                int start = c;
+                while (c < 5 && (s_glyph[ch][r] & (1u << (4 - c)))) c++;
+                s_runs[ch][s_nruns[ch]][0] = (uint8_t)(r << 4 | start);
+                s_runs[ch][s_nruns[ch]][1] = (uint8_t)c;
+                s_nruns[ch]++;
+            }
+        }
+#endif
     }
 }
 
@@ -99,6 +119,10 @@ static unsigned char norm_char(char c)
 {
     unsigned char ch = (unsigned char)c;
     if (ch >= 'a' && ch <= 'z') ch = (unsigned char)(ch - 'a' + 'A');
+#if FACE_BUTTON_LETTERS
+    /* the console's face buttons are letters (the DS's A, B, Y, X: target.h) */
+    if (ch >= 1 && ch <= 4) ch = (unsigned char)"ABYX"[ch - 1];
+#endif
     return ch;
 }
 
@@ -175,6 +199,8 @@ static void for_each_run(float x, float y, float px, float py, int snap, int ali
 typedef struct {
     Color top, bottom, outline;
     float ox, oy; /* outline width across and down */
+    Color row[8]; /* the fill's colour at the top of each row, and at the bottom */
+    int dox, doy; /* the outline's width in device pixels (for_each_run_dev) */
 } FancyCtx;
 
 static void run_plain(float x0, float y0, float x1, float y1, int row, void *ctx)
@@ -193,10 +219,83 @@ static void run_outline(float x0, float y0, float x1, float y1, int row, void *c
 static void run_fill(float x0, float y0, float x1, float y1, int row, void *ctx)
 {
     FancyCtx *f = (FancyCtx *)ctx;
-    Color a = col_lerp(f->top, f->bottom, row / 7.0f);
-    Color b = col_lerp(f->top, f->bottom, (row + 1) / 7.0f);
-    gfx_rect_v(x0, y0, x1, y1, a, b);
+    gfx_rect_v(x0, y0, x1, y1, f->row[row], f->row[row + 1]);
 }
+
+#ifdef GFX_DEVICE_RECTS
+/*
+ * Text on the pixel grid, for a backend that draws in device pixels
+ * (gfx_rect_dev, gfx_glyph_dev, gfx.h; the DS's): the glyphs whole, and
+ * their outlines as the runs of for_each_run grown, worked out in whole
+ * device pixels, in integers. Where floating point is done in software,
+ * text took half a menu's frame otherwise, and a rectangle a run took
+ * more polygons than the DS draws on the options screen. x and y are
+ * already on the grid; px and py whole device pixels (font_pixel).
+ */
+typedef void (*DevRunFn)(int x0, int y0, int x1, int y1, int row, const FancyCtx *f);
+
+static void for_each_run_dev(float x, float y, float px, float py, const char *s, DevRunFn fn, const FancyCtx *f)
+{
+    float gx = draw_pixel_grid(), gy = draw_pixel_grid_y();
+    int X = (int)floorf(x * gx), Y = (int)floorf(y * gy);
+    int PX = (int)(px * gx + 0.5f), PY = (int)(py * gy + 0.5f);
+    for (; *s; s++, X += 6 * PX) {
+        unsigned char ch = norm_char(*s);
+        if (ch >= 128) continue;
+        for (int k = 0; k < s_nruns[ch]; k++) {
+            int r = s_runs[ch][k][0] >> 4, start = s_runs[ch][k][0] & 15, end = s_runs[ch][k][1];
+            fn(X + start * PX, Y + r * PY, X + end * PX, Y + (r + 1) * PY, r, f);
+        }
+    }
+}
+
+/* the glyphs' outlines whole (gfx_glyph_outline_dev); 0 if the backend
+ * didn't take them */
+static int outlines_dev(float x, float y, float px, float py, const char *s, const FancyCtx *f)
+{
+    float gx = draw_pixel_grid(), gy = draw_pixel_grid_y();
+    int X = (int)floorf(x * gx), Y = (int)floorf(y * gy);
+    int PX = (int)(px * gx + 0.5f), PY = (int)(py * gy + 0.5f);
+    for (const char *c = s; *c; c++, X += 6 * PX) {
+        unsigned char ch = norm_char(*c);
+        if (ch < 128 && s_nruns[ch] && !gfx_glyph_outline_dev(X, Y, PX, PY, f->dox, f->doy, ch, f->outline)) return 0;
+    }
+    return 1;
+}
+
+/* the glyphs whole, coloured from top to bottom (gfx_glyph_dev) */
+static void glyphs_dev(float x, float y, float px, float py, const char *s, Color top, Color bottom)
+{
+    float gx = draw_pixel_grid(), gy = draw_pixel_grid_y();
+    int X = (int)floorf(x * gx), Y = (int)floorf(y * gy);
+    int PX = (int)(px * gx + 0.5f), PY = (int)(py * gy + 0.5f);
+    for (; *s; s++, X += 6 * PX) {
+        unsigned char ch = norm_char(*s);
+        if (ch < 128 && s_nruns[ch]) gfx_glyph_dev(X, Y, PX, PY, ch, top, bottom);
+    }
+}
+
+static void dev_outline(int x0, int y0, int x1, int y1, int row, const FancyCtx *f)
+{
+    (void)row;
+    gfx_rect_dev(x0 - f->dox, y0 - f->doy, x1 + f->dox, y1 + f->doy, f->outline, f->outline);
+}
+
+
+/* Where the text starts (aligned, on the grid), as for_each_run has it;
+ * returns 0 when there is no grid to draw on. */
+static int dev_origin(float *x, float *y, float px, int align, const char *s)
+{
+    if (draw_pixel_grid() <= 0.0f || draw_pixel_grid_y() <= 0.0f) return 0;
+    int n = (int)strlen(s);
+    float w = n > 0 ? (n * 6 - 1) * px : 0.0f;
+    if (align == ALIGN_CENTER) *x -= w * 0.5f;
+    else if (align == ALIGN_RIGHT) *x -= w;
+    *x = grid_snap(*x);
+    *y = grid_snap_y(*y);
+    return 1;
+}
+#endif
 
 /*
  * A translucent outline (text fading out) can't be drawn as one rectangle
@@ -287,13 +386,42 @@ static void outline_once(const RunList *l, float ox, float oy, Color c)
 
 void font_draw(float x, float y, float scale, Color c, int align, const char *s)
 {
-    for_each_run(x, y, font_pixel(scale), font_pixel_y(scale), 1, align, s, run_plain, &c);
+    float px = font_pixel(scale), py = font_pixel_y(scale);
+#ifdef GFX_DEVICE_RECTS
+    if (dev_origin(&x, &y, px, align, s)) {
+        glyphs_dev(x, y, px, py, s, c, c);
+        return;
+    }
+#endif
+    for_each_run(x, y, px, py, 1, align, s, run_plain, &c);
 }
 
 static void fancy(float x, float y, float px, float py, int snap, Color top, Color bottom, Color outline,
                   float outline_px, float ox, float oy, int align, const char *s)
 {
-    FancyCtx f = {top, bottom, outline, ox, oy};
+    FancyCtx f = {top, bottom, outline, ox, oy, {0}, 0, 0};
+    for (int r = 0; r <= 7; r++) f.row[r] = col_lerp(top, bottom, r / 7.0f);
+#ifdef GFX_DEVICE_RECTS
+    {
+        float dx = x, dy = y;
+        int see_through = outline_px > 0.0f && COL_A(outline) < 255;
+        if (snap && dev_origin(&dx, &dy, px, align, s)) {
+            f.dox = (int)floorf(ox * draw_pixel_grid() + 0.5f);
+            f.doy = (int)floorf(oy * draw_pixel_grid_y() + 0.5f);
+            /* the outlines whole where the backend takes them; else as
+             * rectangles, or, see-through, as below */
+            int done = outline_px <= 0.0f || outlines_dev(dx, dy, px, py, s, &f);
+            if (!done && !see_through) {
+                for_each_run_dev(dx, dy, px, py, s, dev_outline, &f);
+                done = 1;
+            }
+            if (done) {
+                glyphs_dev(dx, dy, px, py, s, top, bottom);
+                return;
+            }
+        }
+    }
+#endif
     if (outline_px > 0.0f && COL_A(outline) < 255) {
         static RunList runs;
         runs.n = 0;

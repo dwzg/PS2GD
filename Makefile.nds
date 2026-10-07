@@ -1,0 +1,84 @@
+# Nintendo DS build (requires BlocksDS: arm-none-eabi-gcc from the Wonderful
+# toolchain, libnds, ndstool; BLOCKSDS set, as in its Docker image).
+#   make -f Makefile.nds                 -> build/nds/pulsedash.nds
+#   make -f Makefile.nds VERSION=v1.3.0  -> version shown on the title screen (default: git describe)
+#   ./scripts/build-nds.sh               runs this inside the skylyrac/blocksds Docker image
+#
+# The songs and sound effects are recorded at build time by the PC build's
+# nds_tool (the game's synthesizer) into build/nds/nitrofs, which the ROM
+# carries as its file system: see docs/NDS_PORT.md.
+
+BLOCKSDS ?= /opt/blocksds/core
+WONDERFUL_TOOLCHAIN ?= /opt/wonderful
+PREFIX := $(WONDERFUL_TOOLCHAIN)/toolchain/gcc-arm-none-eabi/bin/arm-none-eabi-
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+OUT := build/nds
+include sources.mk
+SRC := $(CORE_SRC) $(filter-out src/core/audio.c src/core/songs.c,$(VECTOR_SRC)) $(wildcard src/nds/*.c)
+# made by nds_tool on the PC (scripts/build-nds.sh): the songs and sound
+# effects (the ROM's file system), the songs' table
+NITRO := $(OUT)/nitrofs
+GEN := $(OUT)/gen
+# The hottest code runs from the ITCM, the ARM9's 32 KB of memory that
+# fetches an instruction a cycle (main RAM takes several where the cache
+# misses): libgcc's single-precision soft float routines (every float
+# operation is a call to them), the 3D engine's backend, the sines and the
+# font and shape drawing. The linker script puts files named *.itcm* there.
+ITCM_SRC := src/nds/gfx_nds.c src/nds/fastmath.c src/core/font.c src/core/draw.c
+OBJS := $(patsubst src/%.c,$(OUT)/%.o,$(filter-out $(ITCM_SRC),$(SRC))) \
+        $(patsubst src/%.c,$(OUT)/%.itcm.o,$(ITCM_SRC)) $(OUT)/gen/gen_nds.o
+SOFTFLOAT := _arm_addsubsf3 _arm_muldivsf3 _arm_cmpsf2 _arm_fixsfsi _arm_fixunssfsi
+SOFTFLOAT_OBJS := $(patsubst %,$(OUT)/softfloat/%.itcm.o,$(SOFTFLOAT))
+
+CC := $(PREFIX)gcc
+SPECS := $(BLOCKSDS)/sys/crts/ds_arm9.specs
+ARCH := -marm -mcpu=arm946e-s+nofp
+CFLAGS := -O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wdouble-promotion \
+          $(ARCH) -ffunction-sections -fdata-sections -specs=$(SPECS) \
+          -D__NDS__ -D__BLOCKSDS__ -DARM9 -DPD_NDS -DGFX_DEVICE_RECTS -DGFX_GLOW -Isrc/nds -I$(GEN) -isystem $(BLOCKSDS)/libs/libnds/include
+LDFLAGS := $(ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -Wl,-Map,$(OUT)/pulsedash.map
+LIBS := -Wl,--start-group -lnds9 -lc -Wl,--end-group
+ARM7ELF := $(BLOCKSDS)/sys/arm7/main_core/arm7_minimal.elf
+
+all: $(OUT)/pulsedash.nds
+
+$(OUT)/%.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/nds/*.h) $(GEN)/gen_nds.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OUT)/gen/gen_nds.o: $(GEN)/gen_nds.c $(GEN)/gen_nds.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(GEN)/gen_nds.h $(GEN)/gen_nds.c:
+	@echo "missing $@: run scripts/build-nds.sh (nds_tool makes it)"; exit 1
+
+$(OUT)/%.itcm.o: src/%.c $(wildcard src/core/*.h) $(wildcard src/nds/*.h) $(GEN)/gen_nds.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# libgcc's own objects, renamed: linked ahead of libgcc, they are the ones used
+$(OUT)/softfloat/%.itcm.o:
+	@mkdir -p $(dir $@)
+	cd $(dir $@) && $(PREFIX)ar x $$($(CC) $(ARCH) -print-libgcc-file-name) $*.o && mv $*.o $*.itcm.o
+
+# printf of floats in the status line
+$(OUT)/nds/main_nds.o: CFLAGS += -Wno-double-promotion
+
+# the version is compiled into one small object, rebuilt every time
+$(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
+$(OUT)/core/version.o: FORCE
+FORCE:
+
+$(OUT)/pulsedash.elf: $(OBJS) $(SOFTFLOAT_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+$(OUT)/pulsedash.nds: $(OUT)/pulsedash.elf
+	$(BLOCKSDS)/tools/ndstool/ndstool -c $@ -7 $(ARM7ELF) -9 $< -d $(NITRO) \
+		-b $(BLOCKSDS)/sys/icon.gif "Pulse Dash;A rhythm platformer;github.com/dwzg/pulsedash"
+	@echo "built: $@"
+
+clean:
+	rm -rf $(OUT)
+
+.PHONY: all clean FORCE

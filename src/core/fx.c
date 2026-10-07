@@ -5,7 +5,12 @@
  * to 100 cycles there); this is the one the others use. */
 #ifndef FX_TARGET
 
+/* (a target.h may ask for fewer: the DS) */
+#ifdef FX_MAX_PARTICLES
+#define MAX_PARTICLES FX_MAX_PARTICLES
+#else
 #define MAX_PARTICLES 700
+#endif
 
 static Particle s_p[MAX_PARTICLES];
 static int s_next;

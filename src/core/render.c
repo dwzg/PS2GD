@@ -453,9 +453,80 @@ void render_level(const View *v, const Level *L, const Player *p, uint8_t saved_
 /* UI helpers                                                          */
 /* ------------------------------------------------------------------ */
 
+#ifdef GFX_DEVICE_RECTS
+/* One row of a panel, its spans of edge and fill colour from x0 to x1 in
+ * device pixels, the edge's at the ends a pixels wide, a span of the
+ * middle (m0..m1) the edge's when mid_edge: the spans that touch and
+ * share a colour as one rectangle. */
+static void panel_row(int x0, int x1, int y, int a, int m0, int m1, int mid_edge, Color fill, Color edge)
+{
+    int xs[6] = {x0, x0 + a, m0, m1, x1 - a, x1};
+    int edge_of[5] = {1, 0, mid_edge, 0, 1};
+    int from = xs[0], k;
+    for (k = 0; k < 5; k++) {
+        int last = k == 4 || edge_of[k + 1] != edge_of[k];
+        if (last) {
+            if (xs[k + 1] > from) gfx_rect_dev(from, y, xs[k + 1], y + 1, edge_of[k] ? edge : fill, edge_of[k] ? edge : fill);
+            from = xs[k + 1];
+        }
+    }
+}
+
+/*
+ * A panel in whole device pixels, for a backend that takes them
+ * (gfx_rect_dev; the DS's): its rounded corners as rows of pixels, those
+ * whose middle is inside the circles, worked out in integers. The corners
+ * are only a few pixels there, and the triangles of render_panel's fans
+ * cost more to work out in software floating point than all its text.
+ */
+static void panel_dev(float x0, float y0, float x1, float y1, float r, float bw, float bh, Color fill, Color edge)
+{
+    float g = draw_pixel_grid();
+    int X0 = (int)floorf(x0 * g), Y0 = (int)floorf(y0 * g), X1 = (int)floorf(x1 * g), Y1 = (int)floorf(y1 * g);
+    int R = (int)(r * g + 0.5f), BW = (int)(bw * g + 0.5f), BDN = (int)(bh * g + 0.5f);
+    static int out_of[16], in_of[16], cached_r = -1, cached_b = -1;
+    if (R > 16 || 2 * R > X1 - X0 || 2 * R > Y1 - Y0) R = 0;
+    if (R != cached_r || BW != cached_b) {
+        /* each row's insets from the panel's side: to the outer circle (R)
+         * and to the inner one (R - BW), at the row's middle */
+        for (int j = 0; j < R; j++) {
+            float dy = (float)R - (float)j - 0.5f, ri = (float)(R - BW);
+            out_of[j] = (int)((float)R - sqrtf((float)(R * R) - dy * dy) + 0.5f);
+            in_of[j] = dy < ri ? (int)((float)R - sqrtf(ri * ri - dy * dy) + 0.5f) : R;
+            if (in_of[j] < out_of[j]) in_of[j] = out_of[j];
+        }
+        cached_r = R;
+        cached_b = BW;
+    }
+    for (int j = 0; j < R; j++) {
+        int o = out_of[j], a = in_of[j] - o;
+        panel_row(X0 + o, X1 - o, Y0 + j, a, X0 + R, X1 - R, j < BDN, fill, edge);
+        panel_row(X0 + o, X1 - o, Y1 - 1 - j, a, X0 + R, X1 - R, j < BDN, fill, edge);
+    }
+    /* the rows between the corners: the sides' edges and the fill; the top
+     * and bottom edges where the corners leave them to these rows */
+    int top = Y0 + R, bot = Y1 - R;
+    if (BDN > R) {
+        gfx_rect_dev(X0 + BW, top, X1 - BW, Y0 + BDN, edge, edge);
+        gfx_rect_dev(X0 + BW, Y1 - BDN, X1 - BW, bot, edge, edge);
+        top = Y0 + BDN;
+        bot = Y1 - BDN;
+    }
+    gfx_rect_dev(X0, Y0 + R, X0 + BW, Y1 - R, edge, edge);
+    gfx_rect_dev(X1 - BW, Y0 + R, X1, Y1 - R, edge, edge);
+    gfx_rect_dev(X0 + BW, top, X1 - BW, bot, fill, fill);
+}
+#endif
+
 void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge)
 {
     const float r = 10.0f, bw = grid_w(3.0f), bh = grid_h(3.0f);
+#ifdef GFX_DEVICE_RECTS
+    if (draw_pixel_grid() > 0.0f && draw_pixel_grid() == draw_pixel_grid_y()) {
+        panel_dev(grid_snap(x0), grid_snap_y(y0), grid_snap(x1), grid_snap_y(y1), r, bw, bh, fill, edge);
+        return;
+    }
+#endif
     /* on whole pixels, so the borders come out even */
     if (draw_pixel_grid() > 0.0f) {
         x0 = grid_snap(x0);
@@ -471,14 +542,28 @@ void render_panel(float x0, float y0, float x1, float y1, Color fill, Color edge
     gfx_rect(x0 + r, y0, x1 - r, y1, fill);
     gfx_rect(x0, y0 + r, x0 + r, y1 - r, fill);
     gfx_rect(x1 - r, y0 + r, x1, y1 - r, fill);
-    /* rounded corners */
+    /* rounded corners: the fans' cosines and sines, worked out once (they
+     * are the same for every panel) */
+    static float cs[4][4][4]; /* corner, step: cos t0, sin t0, cos t1, sin t1 */
+    static int cs_ready;
+    if (!cs_ready) {
+        for (int k = 0; k < 4; k++)
+            for (int i = 0; i < 4; i++) {
+                float a0 = PI + k * PI * 0.5f, t0 = a0 + i * (PI / 8), t1 = t0 + PI / 8;
+                cs[k][i][0] = cosf(t0);
+                cs[k][i][1] = sinf(t0);
+                cs[k][i][2] = cosf(t1);
+                cs[k][i][3] = sinf(t1);
+            }
+        cs_ready = 1;
+    }
     float cxs[4] = {x0 + r, x1 - r, x1 - r, x0 + r}, cys[4] = {y0 + r, y0 + r, y1 - r, y1 - r};
     for (int k = 0; k < 4; k++) {
         float a0 = PI + k * PI * 0.5f;
         for (int i = 0; i < 4; i++) {
-            float t0 = a0 + i * (PI / 8), t1 = t0 + PI / 8;
-            gfx_tri(cxs[k], cys[k], fill, cxs[k] + cosf(t0) * r, cys[k] + sinf(t0) * r, fill,
-                    cxs[k] + cosf(t1) * r, cys[k] + sinf(t1) * r, fill);
+            const float *t = cs[k][i];
+            gfx_tri(cxs[k], cys[k], fill, cxs[k] + t[0] * r, cys[k] + t[1] * r, fill, cxs[k] + t[2] * r,
+                    cys[k] + t[3] * r, fill);
         }
         draw_arc(cxs[k], cys[k], r - bw, r, a0, a0 + PI * 0.5f, edge);
     }

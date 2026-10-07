@@ -114,13 +114,16 @@ static void draw_pause(const PlayState *ps)
     int idx = ps->level_idx < SAVE_MAX_LEVELS ? ps->level_idx : 0;
     char buf[48];
     float ty = font_center_y(130, 142, 2.0f); /* text beside the bars */
+    /* the bars start after the longer label, where a screen's text is wider
+     * (the DS: a pixel of its font is more than 2 of the 640) */
+    float bx = maxf(UI_X(250), UI_X(150) + font_width("PRACTICE", 2.0f) + 6.0f);
     font_draw(UI_X(150), ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "NORMAL");
-    render_progress_bar(UI_X(250), 130, UI_X(440), 142, g->save.progress.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
+    render_progress_bar(bx, 130, UI_X(440), 142, g->save.progress.best[idx] / 100.0f, RGB(90, 255, 120), RGB(200, 255, 200));
     snprintf(buf, sizeof(buf), "%d%%", g->save.progress.best[idx]);
     font_draw(UI_X(452), ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
     ty = font_center_y(156, 168, 2.0f);
     font_draw(UI_X(150), ty, 2.0f, RGB(200, 220, 255), ALIGN_LEFT, "PRACTICE");
-    render_progress_bar(UI_X(250), 156, UI_X(440), 168, g->save.progress.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
+    render_progress_bar(bx, 156, UI_X(440), 168, g->save.progress.best_practice[idx] / 100.0f, RGB(80, 200, 255), RGB(200, 240, 255));
     snprintf(buf, sizeof(buf), "%d%%", g->save.progress.best_practice[idx]);
     font_draw(UI_X(452), ty, 2.0f, COL_WHITE, ALIGN_LEFT, buf);
 
