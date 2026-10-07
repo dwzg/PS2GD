@@ -1,6 +1,7 @@
 # Pulse Dash
 
 A rhythm platformer for the **PlayStation 2**, the **PSP**, the
+[**Nintendo DS**](#nintendo-ds), the
 [**Game Boy Advance**](#game-boy-advance) and the
 [**Game Boy Color**](#game-boy-color), inspired by Geometry Dash: tap to
 jump, hold to fly, and get through each level in one go, in time with the
@@ -76,6 +77,36 @@ On the PSP the analog nub works like the d-pad, and HOME > Quit saves any
 unsaved progress before the game exits. While the HOME menu is open the
 game stands still and is silent; a level is paused, and goes on when it is
 resumed from the pause menu.
+
+## Nintendo DS
+
+![The title, the garage, the level select, two levels and the results on a Nintendo DS, the bottom screen under each](docs/screenshots/nds.png)
+
+The game on a Nintendo DS, from the same code as the PC, PS2 and PSP: the
+game's logic (the menus, levels, practice, results, the title's demo, the
+physics, saves) and its vector drawing, its triangles drawn by the DS's 3D
+engine on the top screen, at the full frame rate, with the same physics to
+the tick. The bottom screen shows the controls, the chosen level's
+records, and in a run the attempt, its coins and room to touch: **the
+touch screen jumps**. The music and sound effects are the game's synth's,
+recorded at build time and streamed from the ROM, in stereo, mixed for
+headphones or (OUTPUT: SPEAKERS) for the DS's own speakers. `pulsedash.nds`
+runs on a DS, DS Lite, DSi or 3DS from a flash card or TWiLight Menu++, and
+in melonDS (A/B/Up/L/R or a touch jump, Start pauses, Y and X place and
+remove practice checkpoints; progress is saved next to the ROM). Releases
+carry it; CI builds it on every push (artifact `pulsedash-nds`), or:
+
+```sh
+scripts/build-nds.sh          # -> build/nds/pulsedash.nds (needs Docker, for BlocksDS, and a C compiler)
+```
+
+What the hardware allows, in short: a 67 MHz ARM9 without floating point
+runs the renderer the PS2 and PSP run, with the hot routines in its fast
+memory, table sines, its square root unit, and text, panels and glows
+drawn whole (textures, whole pixels) rather than in pieces; a level's frame
+takes 34 to 50% of the CPU on average in melonDS, 92% in the busiest
+moment, and none is late. On a DSi it runs at twice the speed. How it
+works and its measurements: [docs/NDS_PORT.md](docs/NDS_PORT.md).
 
 ## Game Boy Advance
 
@@ -161,10 +192,19 @@ ROMs and has SRAM (for the saves), in a Game Boy Advance, a Nintendo DS or
 DS Lite, or an Analogue Pocket. The music is in stereo on headphones; on
 the console's speaker, set OUTPUT to SPEAKER in the options.
 
+**On a Nintendo DS:** `pulsedash-<version>.nds` from the latest
+[release](../../releases/latest), copied to a flash card's memory card (an
+R4 or the like) and started from its menu, on a DS, DS Lite, DSi or 3DS;
+or on a DSi or 3DS from the SD card with TWiLight Menu++ (there it runs
+the CPU at twice the speed). Progress is saved in `PULSEDASH.DAT` next to
+the ROM.
+
 **In an emulator:** [Play!](https://purei.org) boots the PS2 ELF directly
 (File > Boot ELF), no BIOS needed. PCSX2 can boot it too ("Run ELF") with
 your own BIOS dump. [PPSSPP](https://www.ppsspp.org) runs the PSP version
-(open `EBOOT.PBP`), [mGBA](https://mgba.io) the Game Boy Advance ROM.
+(open `EBOOT.PBP`), [mGBA](https://mgba.io) the Game Boy Advance ROM,
+[melonDS](https://melonds.kuribo64.net) the Nintendo DS ROM (saves need
+its SD card for homebrew).
 
 **On a PC:** the same game builds as an SDL2 program (keyboard: Space/Up to
 jump, Esc to pause, Q/E for checkpoints, Backspace to go back; gamepads
@@ -215,18 +255,22 @@ a screen exactly as the PSP draws it. They take a height after it too, to
 stretch the picture: `build/host/pd_tool menu title out.png 1 640 512` is
 the PS2's PAL picture.
 
-Game Boy Advance: `scripts/build-gba.sh` (see
+Nintendo DS: `scripts/build-nds.sh` (see
+[docs/NDS_PORT.md](docs/NDS_PORT.md)); `make -f Makefile.host NDS=1`
+builds the PC version in the DS's layout, to look at its screens. Game
+Boy Advance: `scripts/build-gba.sh` (see
 [docs/GBA_PORT.md](docs/GBA_PORT.md)). Game Boy Color:
 `scripts/build-gbc.sh` (see [docs/GBC_PORT.md](docs/GBC_PORT.md)).
 
-GitHub Actions builds the ELF, the EBOOT and the two Game Boy ROMs
-(uploaded as artifacts) and runs the tests on every push.
+GitHub Actions builds the ELF, the EBOOT, the DS ROM and the two Game Boy
+ROMs (uploaded as artifacts) and runs the tests on every push.
 
 ### Releases
 
 Describe the version in [CHANGELOG.md](CHANGELOG.md) (a `## [1.1.0] - date`
 section), then push a version tag; CI publishes a GitHub release once the
-tests and the PS2, PSP, Game Boy Advance and Game Boy Color builds pass:
+tests and the PS2, PSP, Nintendo DS, Game Boy Advance and Game Boy Color
+builds pass:
 
 ```sh
 git tag v1.1.0
@@ -238,7 +282,8 @@ changelog and licenses, a PSP zip (`PSP/GAME/PulseDash/` with the EBOOT and
 the same documents), the Game Boy Color ROM (`pulsedash-<version>.gbc`, and
 a zip with it, the same documents and `docs/GBC_PORT.md`), the Game Boy
 Advance ROM (`pulsedash-<version>.gba`, and a zip with it, the documents and
-`docs/GBA_PORT.md`) and `SHA256SUMS`. Its notes are the
+`docs/GBA_PORT.md`), the Nintendo DS ROM (`pulsedash-<version>.nds`, and a
+zip with it, the documents and `docs/NDS_PORT.md`) and `SHA256SUMS`. Its notes are the
 version's changelog section followed by the merged pull requests. Tags with
 a hyphen (`v1.1.0-rc1`) become pre-releases.
 
@@ -253,6 +298,7 @@ make -f Makefile.host PSP=1 test  # the same tests in the PSP's widescreen layou
 build/host/gbc_tool difftest      # Game Boy Color: its physics gives the same results, tick for tick
 python3 scripts/gbc-emu-test.py   # play all six levels in the GBC ROM in PyBoy, headless
 build/host/gba_test play build/gba/pulsedash.gba   # play all six levels in the GBA ROM in mGBA's core, headless
+scripts/nds-emu-test.sh           # play all six levels in the DS ROM in melonDS's libretro core, headless
 ```
 
 `pd_tool` contains a level solver: a breadth-first search over button
@@ -338,10 +384,13 @@ level's solution in the ROM in [PyBoy](https://github.com/Baekalfen/PyBoy),
 failing unless the player is where the reference puts it on every tick and
 every frame is on time. The Game Boy Advance runs the reference itself;
 `gba_test play` plays each level's solution in the ROM in
-[mGBA](https://mgba.io)'s core with the same checks, and the save. See
+[mGBA](https://mgba.io)'s core with the same checks, and the save; so does
+the Nintendo DS, and `nds_test play` (`scripts/nds-emu-test.sh`) plays
+each level's solution in melonDS's core with the same checks and that the
+run keeps time with its song. See
 [docs/PORTING.md](docs/PORTING.md) for how the code is shared between
 platforms, [docs/GBA_PORT.md](docs/GBA_PORT.md) and
-[docs/GBC_PORT.md](docs/GBC_PORT.md).
+[docs/GBC_PORT.md](docs/GBC_PORT.md) and [docs/NDS_PORT.md](docs/NDS_PORT.md).
 
 ## Making levels
 
@@ -363,12 +412,16 @@ src/ps2/      PS2 frontend: gsKit renderer, audsrv streaming thread,
 src/psp/      PSP frontend: GU renderer (with its smoothing), SRC audio
               thread, sceCtrl input, memory stick saves, XMB icon and
               background
+src/nds/      Nintendo DS frontend (BlocksDS): the 3D engine as the
+              renderer's backend, the bottom screen drawn by the CPU, the
+              recorded songs streamed from the ROM, FAT saves
 src/host/     SDL2 frontend and pd_tool (screenshots, WAV export, level
               checks); the level solver both tools use (solver.c);
               gbc_tool, which makes the Game Boy Color ROM's data;
               gba_tool, which makes the Game Boy Advance ROM's graphics
               and sound with the game's renderer and synth; gba_test,
-              its emulator test
+              its emulator test; nds_tool, which records the DS ROM's
+              songs; nds_test, its emulator test (melonDS)
 src/gba/      Game Boy Advance frontend (arm-none-eabi-gcc, no SDK): the
               core's game on tiles and sprites, the recorded music's player
 src/gbc/      Game Boy Color version (GBDK-2020): the physics for its 8-bit CPU,
@@ -386,6 +439,11 @@ and on PC. Not yet tried in PCSX2.
 
 The PSP version runs in PPSSPP (rendering, controls, audio streaming, memory
 stick save/load, HOME > Quit); it has not been tried on a real PSP yet.
+
+The Nintendo DS version runs in melonDS (all six levels played through
+in its core, the menus, the pause, the music in time) and boots in
+DeSmuME; it has not been tried on a DS, DSi or 3DS yet, nor its saves
+(which need a flash card's or the DSi's SD card).
 
 The Game Boy Advance version runs in mGBA (all six levels played through
 in its core, the menus, pause, saves); it has not been tried on a Game

@@ -15,6 +15,9 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#ifdef ARM9
+#include <nds/arm9/math.h>
+#endif
 
 #define STEPS 1024 /* table steps a turn (a power of two) */
 
@@ -96,3 +99,39 @@ float expf(float x)
     memcpy(&p, &bits, 4);
     return p;
 }
+
+#ifdef ARM9
+float sqrtf(float x)
+{
+    uint32_t u;
+    memcpy(&u, &x, 4);
+    int e = (int)((u >> 23) & 255);
+    if (!(u & 0x7FFFFFFFu) || (e == 255 && !(u >> 31))) return x; /* +-0, +inf, NaN */
+    if (u >> 31) return (x - x) / (x - x);                        /* NaN */
+    uint32_t m = u & 0x7FFFFFu;
+    if (e) m |= 0x800000u;
+    else
+        for (e = 1; !(m & 0x800000u); e--) m <<= 1; /* (subnormal) */
+    /* x = m * 2^p = (m << sh) * 2^(p - sh), sh making that exponent even
+     * and m 63 or 64 bits */
+    int p = e - 150, sh = (p & 1) ? 39 : 40;
+    REG_SQRTCNT = SQRT_64;
+    REG_SQRT_PARAM = (uint64_t)m << sh;
+    while (REG_SQRTCNT & SQRT_BUSY)
+        ;
+    uint32_t r = REG_SQRT_RESULT; /* floor(sqrt(m << sh)): 31 or 32 bits */
+    /* sqrt(x) = r * 2^((p - sh) / 2): r's top 24 bits, rounded (never a
+     * tie: no root falls halfway between two floats) */
+    int bits = 32 - __builtin_clz(r), drop = bits - 24;
+    uint32_t q = (r >> drop) + ((r >> (drop - 1)) & 1);
+    int exp2 = (p - sh) / 2 + drop;
+    if (q >> 24) {
+        q >>= 1;
+        exp2++;
+    }
+    /* q * 2^exp2, q in [2^23, 2^24) */
+    u = ((uint32_t)(exp2 + 23 + 127) << 23) | (q & 0x7FFFFFu);
+    memcpy(&x, &u, 4);
+    return x;
+}
+#endif

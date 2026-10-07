@@ -65,9 +65,6 @@ $(OUT)/softfloat/%.itcm.o:
 	@mkdir -p $(dir $@)
 	cd $(dir $@) && $(PREFIX)ar x $$($(CC) $(ARCH) -print-libgcc-file-name) $*.o && mv $*.o $*.itcm.o
 
-# printf of floats in the status line
-$(OUT)/nds/main_nds.o: CFLAGS += -Wno-double-promotion
-
 # the version is compiled into one small object, rebuilt every time
 $(OUT)/core/version.o: CFLAGS += -DPD_VERSION=\"$(VERSION)\"
 $(OUT)/core/version.o: FORCE

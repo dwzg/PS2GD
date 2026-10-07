@@ -16,19 +16,15 @@ typedef struct {
     float cx, cy, s, co, si, fy;
     float grid, grid_y; /* > 0: round offsets to this many device pixels per virtual one */
     float inv_grid, inv_grid_y;
+    int quarter;        /* with the grid: the quarter turns (co and si are 0 and +-1) */
 } Xf;
 
-/* A target where a float division is a call of a hundred instructions (the
- * DS: target.h) may ask for the rounded offsets to be multiplied by the
- * grid's inverse instead of divided by the grid: the same to a few
- * millionths of a pixel. */
-#ifndef SNAP_BY_RECIPROCAL
-#define SNAP_BY_RECIPROCAL 0
-#endif
+/* (FLOAT_DIVIDE_SLOW, common.h: the rounded offsets multiplied by the
+ * grid's inverse rather than divided by the grid) */
 
 static Xf xf_make(float cx, float cy, float s, float angle, int flip)
 {
-    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    Xf t = {cx, cy, s, cosf(angle), sinf(angle), flip ? -1.0f : 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0};
     float g = draw_pixel_grid();
     if (g > 0.0f) {
         t.cx = grid_snap(cx);
@@ -42,6 +38,7 @@ static Xf xf_make(float cx, float cy, float s, float angle, int flip)
             t.grid_y = draw_pixel_grid_y();
             t.inv_grid = 1.0f / t.grid;
             t.inv_grid_y = 1.0f / t.grid_y;
+            t.quarter = k;
         }
     }
     return t;
@@ -49,16 +46,25 @@ static Xf xf_make(float cx, float cy, float s, float angle, int flip)
 
 static void xf_pt(const Xf *t, float lx, float ly, float *ox, float *oy)
 {
-    ly *= t->fy;
-    float dx = (lx * t->co - ly * t->si) * t->s, dy = (lx * t->si + ly * t->co) * t->s;
+    float dx, dy;
+    if (t->fy < 0.0f) ly = -ly;
     if (t->grid > 0.0f) {
-#if SNAP_BY_RECIPROCAL
+        /* square to the screen: the turn is a swap and signs (the same as
+         * multiplying by 0 and +-1, cheaper where floats are software) */
+        float rx = t->quarter == 0 ? lx : t->quarter == 1 ? -ly : t->quarter == 2 ? -lx : ly;
+        float ry = t->quarter == 0 ? ly : t->quarter == 1 ? lx : t->quarter == 2 ? -ly : -lx;
+        dx = rx * t->s;
+        dy = ry * t->s;
+#if FLOAT_DIVIDE_SLOW
         dx = roundf(dx * t->grid) * t->inv_grid;
         dy = roundf(dy * t->grid_y) * t->inv_grid_y;
 #else
         dx = roundf(dx * t->grid) / t->grid;
         dy = roundf(dy * t->grid_y) / t->grid_y;
 #endif
+    } else {
+        dx = (lx * t->co - ly * t->si) * t->s;
+        dy = (lx * t->si + ly * t->co) * t->s;
     }
     *ox = t->cx + dx;
     *oy = t->cy + dy;

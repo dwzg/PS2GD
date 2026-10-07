@@ -114,7 +114,11 @@ void draw_line2(float x0, float y0, float x1, float y1, float w, Color c0, Color
     w = fabsf(dx) >= fabsf(dy) ? grid_h(w) : grid_w(w);
     float len = sqrtf(dx * dx + dy * dy);
     if (len < 0.0001f) return;
+#if FLOAT_DIVIDE_SLOW
+    float k = w * 0.5f / len, nx = -dy * k, ny = dx * k;
+#else
     float nx = -dy / len * w * 0.5f, ny = dx / len * w * 0.5f;
+#endif
     float xy[8] = {x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny};
     Color c[4] = {c0, c1, c1, c0};
     gfx_quad(xy, c);

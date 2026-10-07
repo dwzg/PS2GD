@@ -2,9 +2,9 @@ name: build
 
 # Every push and pull request: build the PS2 ELF and the PSP EBOOT and run
 # the level tests; build the Game Boy Color demo ROM, the Game Boy Advance
-# ROM and the Nintendo DS ROM and play their levels in an emulator. Pushing a version tag
-# (v1.2.0, or v1.3.0-rc1 for a pre-release) also publishes a GitHub
-# release with all the builds once their jobs pass.
+# ROM and the Nintendo DS ROM and play their levels in an emulator.
+# Pushing a version tag (v1.2.0, or v1.3.0-rc1 for a pre-release) also
+# publishes a GitHub release with all the builds once their jobs pass.
 on:
   push:
     branches: ['**']

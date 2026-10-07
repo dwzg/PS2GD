@@ -363,7 +363,8 @@ static long s_frame;
 static const char *s_shots;
 
 /* NdsStats (main_nds.c): the words read here */
-enum { ST_FRAMES = 1, ST_LATE = 2, ST_WORK_LAST = 3, ST_POLYS_MAX = 5, ST_DROPPED = 6, ST_LATE_AT = 18 };
+enum { ST_FRAMES = 1, ST_LATE = 2, ST_WORK_LAST = 3, ST_POLYS_MAX = 5, ST_DROPPED = 6, ST_TICK_LAST = 9,
+       ST_DRAW_LAST = 10, ST_AUDIO_LAST = 11, ST_LATE_AT = 18 };
 #define FRAME_CYCLES 560190.0 /* bus cycles a frame */
 #define SAMPLES_PER_TICK (560190.0 / 1024.0)
 
@@ -619,7 +620,9 @@ static int play_level(int idx)
             break;
         }
         if (tick >= 30) {
-            double w = stat(ST_WORK_LAST) / FRAME_CYCLES;
+            /* the game's (the ticks, the drawing, the sound), without the
+             * bottom screen's drawing, which takes what time is left */
+            double w = (stat(ST_TICK_LAST) + stat(ST_DRAW_LAST) + stat(ST_AUDIO_LAST)) / FRAME_CYCLES;
             wsum += w;
             wn++;
             if (w > wmax) {
@@ -697,7 +700,8 @@ static int play_level(int idx)
     if (!ok) leave_run();
     if (ok)
         printf("level %d (%s): ok, %d ticks as the reference, no frame late, in time with its song (within %.2f "
-               "ticks), music rms %.0f; a frame's work %.0f%% / %.0f%% (mean / most, at tick %d)\n",
+               "ticks), music rms %.0f; a frame's work %.0f%% / %.0f%% (mean / most, at tick %d; the game's, without the bottom "
+               "screen's, which takes the time left)\n",
                idx, info.name, t, lead_hi - lead_lo, snd, 100.0 * wsum / (double)(wn ? wn : 1), 100.0 * wmax,
                wmax_tick);
     level_free(L);

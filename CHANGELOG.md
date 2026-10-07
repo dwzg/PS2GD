@@ -7,6 +7,42 @@ section from this file as release notes.
 
 ## [Unreleased]
 
+### Added
+
+- A Nintendo DS version (`pulsedash.nds`, built by `scripts/build-nds.sh`
+  with BlocksDS in its Docker image, and by CI as the `pulsedash-nds`
+  artifact). It runs the game's own code and the vector family's renderer,
+  the same files as the PC, PS2 and PSP, its triangles drawn by the DS's
+  3D engine on the top screen: all six levels with the same physics to the
+  tick, practice, the results, the title's demo run, the garage, the level
+  select, the options (OUTPUT and the audio delay) and saves
+  (`PULSEDASH.DAT` next to the ROM), at the full frame rate. The bottom
+  screen shows the controls, the chosen level's records, and in a run the
+  attempt, its coins and room to touch: the touch screen jumps. Its songs
+  and sound effects are the game's synth's, recorded at build time
+  (`nds_tool`), mixed for headphones and for the DS's speakers, and read
+  from the ROM as they play. On a DSi it runs at 133 MHz. See
+  [docs/NDS_PORT.md](docs/NDS_PORT.md).
+- `nds_test play` (`scripts/nds-emu-test.sh`) plays every level in the
+  DS ROM in melonDS's libretro core with the solver's inputs, and checks
+  the player against the reference on every tick, that no frame is late
+  and that the run keeps time with its song; CI runs it.
+- `make -f Makefile.host NDS=1` builds the PC version in the DS's layout;
+  `pd_tool nds-icon` draws the DS menu's icon.
+
+### Changed
+
+- The renderer's shared drawing does less work for the same pictures (a
+  circle's points, a panel's corners, a level's columns and rows worked
+  out once, constant colours and stroke widths kept), and backends and
+  targets can ask for text and panels in whole device pixels, coarser
+  curves, fewer particles and the face buttons named by letter (see
+  [docs/PORTING.md](docs/PORTING.md)). The PC, PS2 and PSP draw the same
+  pictures as before.
+- The options' OUTPUT help is in shorter lines (the DS's screen holds 34
+  letters a line); the pause menu's bests bars start after the longer
+  label.
+
 ## [1.3.0] - 2026-10-07
 
 ### Added

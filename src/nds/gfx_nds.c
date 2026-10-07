@@ -9,7 +9,7 @@
  * and the see-through ones are drawn in the order they came
  * (GL_TRANS_MANUALSORT): whatever is drawn later is in front, as the core
  * expects. Up to 2048 polygons a frame (the engine's limit; a frame of a
- * level has 400 to 1100 primitives, a quad being one polygon).
+ * level has 400 to 900, a quad being one polygon).
  *
  * Its colours are 5 bits a channel. Its alpha is one per polygon (5 bits),
  * not per vertex: a primitive whose corners differ in alpha (a glow fading
@@ -34,7 +34,8 @@
  * Their outlines too (gfx_glyph_outline_dev): for each size of the font's
  * pixels and of the outline the game draws, a texture of every glyph's
  * outline ring (the pixels within the outline's width of the glyph's,
- * not its own), made when first drawn. The rings of glyphs side by side
+ * not its own), made at start-up (gfx_nds_prepare_outlines) or when
+ * first drawn. The rings of glyphs side by side
  * overlap, but a see-through polygon is not drawn over one of the same
  * polygon ID, and they share one: the outline comes out even.
  *

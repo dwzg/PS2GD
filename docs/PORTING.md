@@ -1,7 +1,7 @@
 # How the code is shared between platforms
 
-Pulse Dash runs on a PC, a PS2, a PSP, a Game Boy Advance and a Game Boy
-Color. These are very
+Pulse Dash runs on a PC, a PS2, a PSP, a Nintendo DS, a Game Boy Advance
+and a Game Boy Color. These are very
 different machines, so not all of them can run the same code, but they all
 play the same game: the same levels, songs and rules, and the same physics
 to the tick. This is how the code is split to make that possible, and what a
@@ -66,8 +66,9 @@ doesn't fit is left out of that platform.
 Graphics, sound output, menus and the frame loop belong to the platform.
 Platforms that draw the same way share it:
 
-- *The vector family* (PC, PS2, PSP): `src/core` draws everything as
-  triangles and rectangles in a 640x448 virtual screen (wider on the PSP)
+- *The vector family* (PC, PS2, PSP, DS): `src/core` draws everything as
+  triangles and rectangles in a 640x448 virtual screen (wider on the PSP,
+  narrower on the DS)
   and plays the songs with a software synthesizer (`VECTOR_SRC` in
   `sources.mk`), around the game's logic that runs the menus, the levels
   and the title screen's demo (`CORE_SRC`, which a platform with a
@@ -92,6 +93,28 @@ Platforms that draw the same way share it:
   adds the options' FLICKER FILTER row, kept in the save's `flicker` byte
   (its last reserved byte: the save's format and size are unchanged) and
   passed to `plat_flicker_filter()`.
+  - The Nintendo DS is the family's platform without floating point
+    (`src/nds`, [NDS_PORT.md](NDS_PORT.md)): its 3D engine draws the
+    primitives, but its CPU does the renderer's float math in software,
+    and a backend can do two things for it. Built with
+    `GFX_DEVICE_RECTS`, it draws rectangles given in whole device pixels
+    of the pixel grid and the font's glyphs (and their outlines) whole
+    (`gfx_rect_dev`, `gfx_glyph_dev`, `gfx_glyph_outline_dev`, `gfx.h`):
+    text and panels on the grid are then worked out in integers
+    (`font.c`, `render_panel`), a glyph a polygon rather than a rectangle
+    a run of its pixels. With `GFX_GLOW` (as the PSP's) a glow is one
+    textured square. Its `target.h` asks the core for what a coarse,
+    slow screen needs, each off unless a target asks: `CURVE_DETAIL`
+    (circles and rings cut by their radius in device pixels),
+    `FX_MAX_PARTICLES` (fewer particles), `FLOAT_DIVIDE_SLOW` (a
+    multiplication by an inverse where a float division would come twice:
+    the same to millionths of a pixel, not to the bit) and
+    `FACE_BUTTON_LETTERS` (the help texts name the face buttons A, B, Y,
+    X). Its `sinf`, `cosf`, `expf` and `sqrtf` are its own (the C
+    library's work in double precision), and it plays the synth's songs
+    recorded at build time (`nds_tool`), as the GBA does, through the
+    `audio.h` API. Speedups the DS needed in the shared drawing were made
+    so that the other platforms' pictures stay the same to the bit.
 - *The tile family* (Game Boy Advance, Game Boy Color): the level is
   streamed into a tile map, the player and the objects are sprites.
   - The Game Boy Advance runs `CORE_SRC` unchanged, the menus and the
@@ -157,18 +180,20 @@ something a platform can match exactly:
   game's logic and data, and `VECTOR_SRC`, the vector family's drawing and
   synth), adds the frontend's and puts its folder on the include path.
   Everything else is shared.
-- **A 32-bit CPU without floating point** (DS, PS1, like the GBA): the
-  game's logic runs as it is, in software floating point (on the GBA a
-  third of a frame on average, with the hottest routines in fast RAM); the
-  vector family's renderer and synth use floats per pixel and per sample
-  and would not fit, so the presentation is the platform's own, as
-  `src/gba` is, and the host tool can draw and record it with the
-  renderer and synth at build time, as `gba_tool` does.
+- **A 32-bit CPU without floating point**: the game's logic runs as it
+  is, in software floating point (on the GBA a third of a frame on
+  average, with the hottest routines in fast RAM). The synth uses floats
+  per sample and won't fit: the host tool records the songs at build time
+  (`gba_tool`, `nds_tool`). With a GPU that draws triangles (the DS, a
+  PS1) the vector family's renderer can fit too, with the backend's
+  capabilities and target options above (`src/nds`); without one, the
+  presentation is the platform's own, as `src/gba` is, and the host tool
+  can draw it with the renderer at build time, as `gba_tool` does.
 - **An 8 or 16-bit CPU** (Game Boy, NES, Master System, Mega Drive): its own
   version of the physics, with a difftest against the reference like
   `gbc_tool difftest`, and a data tool like `gbc_tool` for its formats.
 
-Whatever the platform, test it the way the Game Boys are tested
-(`scripts/gbc-emu-test.py`, `gba_test play`): play the solver's runs of
+Whatever the platform, test it the way the handhelds are tested
+(`scripts/gbc-emu-test.py`, `gba_test play`, `nds_test play`): play the solver's runs of
 every level in an emulator, compare the player with the reference after
 every tick, and check that no frame runs late.

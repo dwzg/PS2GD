@@ -22,7 +22,8 @@
  * of the console's screen pixels one virtual pixel covers (text, icons and
  * thin lines are drawn on whole screen pixels so they stay sharp and even,
  * draw.h). From target.h in the platform's source folder (src/ps2,
- * src/psp; the PC build's src/host/target.h picks one of them).
+ * src/psp, src/nds, src/gba; the PC build's src/host/target.h picks the
+ * PS2's, the PSP's or the DS's).
  */
 #include "target.h"
 #define SCREEN_H 448
@@ -47,6 +48,14 @@
  * than by the PlayStation's symbols */
 #ifndef FACE_BUTTON_LETTERS
 #define FACE_BUTTON_LETTERS 0
+#endif
+
+/* on a target where a float division costs many times a multiplication
+ * (the DS: in software), the drawing multiplies by an inverse where it
+ * would divide twice by one number (icons.c, draw.c's lines): the same
+ * to a few millionths of a pixel, not to the bit as elsewhere */
+#ifndef FLOAT_DIVIDE_SLOW
+#define FLOAT_DIVIDE_SLOW 0
 #endif
 
 /* x in a layout drawn for a 640-wide screen, centred on this one */

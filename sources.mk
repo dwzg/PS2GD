@@ -1,16 +1,19 @@
 # The portable game's sources, for the makefiles of every platform that
-# runs the shared core (PS2: Makefile, PSP: Makefile.psp, PC: Makefile.host).
+# runs the shared core (PS2: Makefile, PSP: Makefile.psp, PC: Makefile.host,
+# DS: Makefile.nds, GBA: Makefile.gba).
 #
 # CORE_SRC is the game's logic and data: the physics, levels, saves and
 # progress, the menus' and the play screen's flow, the title screen's demo
 # run, the camera, palette changes and particles. Every platform that runs
-# the core links it (PC, PS2, PSP and GBA).
+# the core links it (PC, PS2, PSP, DS and GBA).
 #
-# VECTOR_SRC is the vector family's presentation (PC, PS2, PSP): the
+# VECTOR_SRC is the vector family's presentation (PC, PS2, PSP, DS): the
 # triangle renderer, the font and icons drawn with it, the drawing of the
 # screens, and the software synthesizer with its songs. A platform with a
 # presentation of its own links CORE_SRC only and provides game_draw_init,
-# game_render (game.h) and the calls of audio.h the core makes.
+# game_render (game.h) and the calls of audio.h the core makes; the DS
+# links VECTOR_SRC but the synthesizer (audio.c, songs.c) and plays songs
+# recorded at build time through audio.h, as the GBA does.
 #
 # The core's files are listed one by one: a new one goes into one list or
 # the other deliberately. A vector family platform adds its own folder:
